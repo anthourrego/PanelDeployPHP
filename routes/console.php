@@ -1,0 +1,100 @@
+<?php
+
+use App\Models\DeploymentTarget;
+use App\Models\Server;
+use App\Models\User;
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Validation\Rules\Password;
+
+Artisan::command('panel:create-user', function () {
+    $name = $this->ask('Nombre');
+    $email = $this->ask('Correo');
+    $password = $this->secret('Contraseña (mínimo 12 caracteres)');
+    $confirmation = $this->secret('Confirme la contraseña');
+    $validator = Validator::make(
+        compact('name', 'email', 'password') + ['password_confirmation' => $confirmation],
+        ['name' => ['required', 'string', 'max:255'], 'email' => ['required', 'email', 'unique:users,email'], 'password' => ['required', 'confirmed', Password::min(12)]],
+    );
+    if ($validator->fails()) {
+        foreach ($validator->errors()->all() as $error) {
+            $this->error($error);
+        }
+
+        return 1;
+    }
+    User::create(compact('name', 'email', 'password'));
+    $this->info('Usuario creado.');
+
+    return 0;
+})->purpose('Crear un usuario del panel');
+
+Artisan::command('panel:agent-token {server_id}', function () {
+    $server = Server::find($this->argument('server_id'));
+    if (! $server) {
+        $this->error('Servidor no encontrado.');
+
+        return 1;
+    }
+    if ($server->active_target_id !== null) {
+        $this->error('No se puede cambiar el token mientras existe un trabajo en ejecución.');
+
+        return 1;
+    }
+    if ($server->agent_token_hash && ! $this->confirm('Esto revocará el token anterior. ¿Continuar?', false)) {
+        return 1;
+    }
+    $secret = bin2hex(random_bytes(32));
+    $query = Server::whereKey($server->id)->whereNull('active_target_id');
+    $server->agent_token_hash
+        ? $query->where('agent_token_hash', $server->agent_token_hash)
+        : $query->whereNull('agent_token_hash');
+    $updated = $query->update(['agent_token_hash' => hash('sha256', $secret)]);
+    if ($updated !== 1) {
+        $this->error('El servidor ahora tiene un trabajo activo; no se cambió el token.');
+
+        return 1;
+    }
+    $this->line('Token (se muestra una sola vez): '.$server->id.'.'.$secret);
+
+    return 0;
+})->purpose('Generar o rotar el token de un servidor');
+
+Artisan::command('panel:resolve-stuck {target_id}', function () {
+    $target = DeploymentTarget::find($this->argument('target_id'));
+    if (! $target || ! in_array($target->status, ['running', 'uncertain'], true)) {
+        $this->error('El trabajo no existe o no requiere revisión.');
+
+        return 1;
+    }
+    if (! $this->confirm('¿Confirmó en Windows que el agente está detenido y revisó el estado del repositorio? El trabajo se marcará como fallido.', false)) {
+        return 1;
+    }
+    $resolved = DB::transaction(function () use ($target) {
+        $server = Server::whereKey($target->server_id)->lockForUpdate()->firstOrFail();
+        $target = DeploymentTarget::whereKey($target->id)->lockForUpdate()->firstOrFail();
+        if ($server->active_target_id !== $target->id || ! in_array($target->status, ['running', 'uncertain'], true)) {
+            return false;
+        }
+        $target->status = 'failed';
+        $target->result = trim(($target->result ?? '')."\nCerrado manualmente después de revisión.");
+        $target->finished_at = now();
+        $target->save();
+        $server->active_target_id = null;
+        $server->save();
+        DB::table('deployment_reservations')->where('deployment_target_id', $target->id)->delete();
+        Log::warning('Trabajo cerrado manualmente.', ['target_id' => $target->id, 'server_id' => $server->id]);
+
+        return true;
+    });
+    if (! $resolved) {
+        $this->error('El estado cambió; no se realizó ninguna modificación.');
+
+        return 1;
+    }
+    $this->info('Trabajo cerrado como fallido.');
+
+    return 0;
+})->purpose('Cerrar un trabajo bloqueado después de revisión manual');

@@ -1,0 +1,10 @@
+#!/bin/sh
+case " $* " in
+    *" BatchMode=yes "*) ;;
+    *) exit 90 ;;
+esac
+case " $* " in
+    *" StrictHostKeyChecking=yes "*) ;;
+    *) exit 91 ;;
+esac
+exec git-upload-pack "$PANEL_TEST_REPOSITORY"
