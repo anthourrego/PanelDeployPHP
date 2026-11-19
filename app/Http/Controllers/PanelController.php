@@ -21,9 +21,10 @@ use RuntimeException;
 
 class PanelController extends Controller
 {
-    public function index(string $section): Response
+    public function index(Request $request, string $section): Response
     {
         return Inertia::render('Panel', [
+            'user' => $request->user()->only(['name', 'email']),
             'section' => $section,
             'sectionUrls' => [
                 'summary' => route('panel', absolute: false),

@@ -44,6 +44,17 @@ class PanelTest extends TestCase
         }
     }
 
+    public function test_panel_exposes_only_the_authenticated_users_name_and_email(): void
+    {
+        $user = User::factory()->create(['name' => 'Usuario de prueba', 'email' => 'usuario@example.test']);
+
+        $this->actingAs($user)->get('/')->assertInertia(fn (Assert $page) => $page
+            ->component('Panel')
+            ->has('user', fn (Assert $userPage) => $userPage
+                ->where('name', 'Usuario de prueba')
+                ->where('email', 'usuario@example.test')));
+    }
+
     public function test_direct_section_links_require_authentication(): void
     {
         foreach (['/programaciones', '/proyectos', '/servidores'] as $url) {

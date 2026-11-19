@@ -1,5 +1,5 @@
 import { Head, Link, router, useForm } from '@inertiajs/react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AssignmentModal, DeploymentModal, ProjectModal, ServerModal, SshModal, TokenModal } from '../components/Modals';
 import ThemeToggle from '../components/ThemeToggle';
 import { confirmAction, notifyError, notifySuccess } from '../lib/notify';
@@ -45,7 +45,7 @@ function ServerStatus({ server }) {
 
 function StatCard({ icon, label, tone, value }) {
     return (
-        <div className="flex items-center gap-4 rounded-2xl bg-white dark:bg-slate-900 p-5 shadow-sm ring-1 ring-slate-200 dark:ring-slate-700">
+        <div className="flex items-center gap-4 rounded-2xl bg-white/90 p-5 shadow-sm ring-1 ring-green-900/10 dark:bg-[#17251a] dark:ring-white/15">
             <span className={`grid size-12 place-items-center rounded-xl ${tone}`}><Icon className="size-6" name={icon} /></span>
             <div>
                 <p className="font-display text-2xl font-extrabold text-neutral-800 dark:text-slate-100">{value}</p>
@@ -55,12 +55,84 @@ function StatCard({ icon, label, tone, value }) {
     );
 }
 
+function UserMenu({ onLogout, processing, user }) {
+    const [open, setOpen] = useState(false);
+    const container = useRef(null);
+    const trigger = useRef(null);
+    const initial = Array.from(user.name.trim() || user.email)[0].toLocaleUpperCase();
+
+    useEffect(() => {
+        if (!open) {
+            return undefined;
+        }
+
+        const onPointerDown = (event) => {
+            if (!container.current?.contains(event.target)) {
+                setOpen(false);
+            }
+        };
+        const onKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                setOpen(false);
+                trigger.current?.focus();
+            }
+        };
+
+        document.addEventListener('pointerdown', onPointerDown);
+        document.addEventListener('keydown', onKeyDown);
+
+        return () => {
+            document.removeEventListener('pointerdown', onPointerDown);
+            document.removeEventListener('keydown', onKeyDown);
+        };
+    }, [open]);
+
+    return (
+        <div className="relative" onBlur={(event) => {
+            if (!event.currentTarget.contains(event.relatedTarget)) {
+                setOpen(false);
+            }
+        }} ref={container}>
+            <button
+                aria-controls="user-menu"
+                aria-expanded={open}
+                aria-label="Menú de usuario"
+                className="grid size-10 shrink-0 place-items-center rounded-full bg-prosof-action text-sm font-bold text-white transition hover:bg-prosof-action-hover"
+                onClick={() => setOpen(!open)}
+                ref={trigger}
+                type="button"
+            >
+                {initial}
+            </button>
+            {open && (
+                <div id="user-menu" className="absolute right-0 top-full z-50 mt-2 w-64 max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-xl dark:border-white/15 dark:bg-[#17251a]">
+                    <div className="border-b border-slate-200 px-4 py-3 dark:border-white/10">
+                        <p className="break-words text-sm font-bold text-slate-900 dark:text-slate-100">{user.name}</p>
+                        <p className="mt-1 break-all text-xs text-slate-600 dark:text-slate-300">{user.email}</p>
+                    </div>
+                    <button
+                        className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-semibold text-red-800 transition hover:bg-red-50 disabled:opacity-60 dark:text-red-300 dark:hover:bg-red-950/60"
+                        disabled={processing}
+                        onClick={() => {
+                            setOpen(false);
+                            onLogout();
+                        }}
+                        type="button"
+                    >
+                        <Icon className="size-4" name="logout" />Cerrar sesión
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+}
+
 function CancelTargetButton({ target }) {
     const form = useForm({});
 
     return (
         <button
-            className="rounded-md border border-red-300 dark:border-red-800 px-2.5 py-1 text-xs font-semibold text-red-800 dark:text-red-200 transition hover:bg-red-50 dark:hover:bg-red-950/70 disabled:opacity-60"
+            className="rounded-md border border-red-600 dark:border-red-800 bg-red-50 dark:bg-transparent px-2.5 py-1 text-xs font-semibold text-red-800 dark:text-red-200 transition hover:bg-red-100 dark:hover:bg-red-950/70 disabled:opacity-60"
             disabled={form.processing}
             onClick={async () => {
                 const confirmed = await confirmAction({
@@ -338,7 +410,7 @@ function ProjectsGrid({ onAssign, onSsh, projects }) {
     );
 }
 
-export default function Panel({ deployments, projects, section, sectionUrls, servers }) {
+export default function Panel({ deployments, projects, section, sectionUrls, servers, user }) {
     const [modal, setModal] = useState(null);
     const [tokenReveal, setTokenReveal] = useState(null);
     const [menuOpen, setMenuOpen] = useState(false);
@@ -407,33 +479,41 @@ export default function Panel({ deployments, projects, section, sectionUrls, ser
     return (
         <>
             <Head title="Panel de despliegues" />
-            <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 lg:flex">
-                <div className="sticky top-0 z-30 flex items-center justify-between border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 py-3 lg:hidden">
-                    <button aria-label="Abrir menú" className="rounded-lg p-2 text-slate-600 dark:text-slate-300 transition hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => setMenuOpen(true)} type="button">
-                        <Icon name="menu" />
+            <div className="panel-backdrop min-h-screen text-slate-900 dark:text-slate-100">
+                <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-green-900/10 bg-white/55 px-4 backdrop-blur-[30px] backdrop-saturate-175 sm:gap-5 sm:px-6 dark:border-white/10 dark:bg-[#142118]/80">
+                    <button aria-controls="panel-navigation" aria-expanded={menuOpen} aria-label={menuOpen ? 'Cerrar menú' : 'Abrir menú'} className="grid size-10 shrink-0 place-items-center rounded-full bg-white/80 text-slate-700 transition hover:bg-white dark:bg-white/10 dark:text-slate-100 dark:hover:bg-white/20 lg:hidden" onClick={() => setMenuOpen(!menuOpen)} type="button">
+                        <Icon name={menuOpen ? 'close' : 'menu'} />
                     </button>
-                    <img alt="Prosof" className="h-8 w-auto rounded-sm dark:bg-white dark:ring-4 dark:ring-white" src="/img/prosof.png" />
-                    <span className="size-9" />
-                </div>
+                    <button aria-controls="panel-navigation" aria-expanded={!collapsed} aria-label={collapsed ? 'Expandir menú' : 'Contraer menú'} className="hidden size-10 shrink-0 place-items-center rounded-full bg-white/80 text-slate-700 transition hover:bg-white dark:bg-white/10 dark:text-slate-100 dark:hover:bg-white/20 lg:grid" onClick={() => setCollapsed(!collapsed)} type="button">
+                        <Icon name={collapsed ? 'menu' : 'close'} />
+                    </button>
+                    <img alt="Prosof" className="h-8 w-auto max-w-[45%] object-contain" src="/img/prosof-logo.webp" />
+                    <p className="hidden border-l border-green-900/15 pl-5 text-sm text-slate-600 sm:block dark:border-white/15 dark:text-slate-300">Panel de despliegues <span className="font-semibold text-slate-900 dark:text-white">:: Prosof SAS</span></p>
+                    <div className="ml-auto flex items-center gap-3">
+                        <ThemeToggle />
+                        <UserMenu onLogout={logout} processing={logoutForm.processing} user={user} />
+                    </div>
+                </header>
 
                 {menuOpen && <div aria-hidden="true" className="fixed inset-0 z-40 bg-neutral-900/50 lg:hidden" onClick={() => setMenuOpen(false)} />}
 
-                <aside className={`fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 transition-all duration-200 lg:sticky lg:top-0 lg:z-20 lg:h-screen lg:shrink-0 lg:translate-x-0 ${menuOpen ? 'translate-x-0 shadow-xl' : '-translate-x-full'} ${collapsed ? 'lg:w-[72px]' : 'lg:w-64'}`}>
-                    <div className={`flex h-16 items-center justify-between px-5 ${collapsed ? 'lg:justify-center lg:px-0' : ''}`}>
-                        <img alt="Prosof" className={`h-10 w-auto rounded-sm dark:bg-white dark:ring-4 dark:ring-white ${collapsed ? 'lg:hidden' : ''}`} src="/img/prosof.png" />
-                        {collapsed && <img alt="Prosof" className="hidden size-10 object-contain lg:block" src="/img/prosof-isotipo.webp" />}
-                        <button aria-label="Cerrar menú" className="rounded-lg p-2 text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 lg:hidden" onClick={() => setMenuOpen(false)} type="button">
+                <div className="lg:flex lg:items-start lg:gap-4 lg:px-4 lg:pb-4">
+                <aside id="panel-navigation" className={`fixed bottom-4 left-4 top-4 z-50 flex w-72 max-w-[calc(100vw-2rem)] flex-col rounded-2xl border border-white/80 bg-white/55 shadow-xl backdrop-blur-[30px] backdrop-saturate-175 dark:border-white/15 dark:bg-[#17251a]/95 lg:sticky lg:bottom-auto lg:left-auto lg:top-20 lg:z-20 lg:mt-4 lg:h-[calc(100vh-6rem)] lg:shrink-0 lg:shadow-sm ${menuOpen ? 'visible translate-x-0' : 'invisible -translate-x-[110%] lg:visible lg:translate-x-0'} ${collapsed ? 'lg:w-[72px]' : 'lg:w-[210px]'}`}>
+                    <div className="flex items-center justify-between px-4 pt-4 lg:hidden">
+                        <span className="font-display text-sm font-bold text-slate-700 dark:text-slate-200">Navegación</span>
+                        <button aria-label="Cerrar menú" className="rounded-lg p-2 text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-white/10" onClick={() => setMenuOpen(false)} type="button">
                             <Icon name="close" />
                         </button>
                     </div>
-                    <nav className="flex-1 space-y-1 overflow-y-auto px-3 pt-2">
+                    <nav aria-label="Navegación principal" className="flex-1 space-y-1 overflow-y-auto px-2 pt-3">
                         {sections.map((item) => (
                             <Link
                                 aria-current={section === item.key ? 'page' : undefined}
                                 aria-label={item.label}
-                                className={`flex w-full items-center gap-3 whitespace-nowrap rounded-lg px-3 py-2.5 text-sm font-semibold transition ${collapsed ? 'lg:justify-center lg:px-0' : ''} ${section === item.key ? 'bg-prosof-lime/25 text-prosof-ink dark:text-prosof-lime' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+                                className={`flex w-full items-center gap-3 whitespace-nowrap rounded-xl px-3 py-3 text-sm font-semibold transition ${collapsed ? 'lg:justify-center lg:px-0' : ''} ${section === item.key ? 'bg-prosof-lime/20 text-prosof-ink ring-1 ring-prosof-dark/30 dark:bg-prosof-lime/15 dark:text-prosof-lime dark:ring-prosof-lime/30' : 'text-slate-600 hover:bg-green-900/5 dark:text-slate-300 dark:hover:bg-white/10'}`}
                                 href={sectionUrls[item.key]}
                                 key={item.key}
+                                onClick={() => setMenuOpen(false)}
                                 title={collapsed ? item.label : undefined}
                             >
                                 <Icon className={`size-5 shrink-0 ${section === item.key ? 'text-prosof-dark dark:text-prosof-lime' : ''}`} name={item.icon} />
@@ -441,47 +521,29 @@ export default function Panel({ deployments, projects, section, sectionUrls, ser
                             </Link>
                         ))}
                     </nav>
-                    <div className="space-y-1 border-t border-slate-100 dark:border-slate-800 px-3 py-3">
-                        <button
-                            className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold text-slate-600 dark:text-slate-300 transition hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-60 ${collapsed ? 'lg:justify-center lg:px-0' : ''}`}
-                            disabled={logoutForm.processing}
-                            onClick={logout}
-                            title={collapsed ? 'Salir' : undefined}
-                            type="button"
-                        >
-                            <Icon className="size-5 shrink-0" name="logout" />
-                            <span className={collapsed ? 'lg:hidden' : ''}>Salir</span>
-                        </button>
-                        <button
-                            aria-label={collapsed ? 'Expandir menú' : 'Contraer menú'}
-                            className={`hidden w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-semibold text-slate-500 dark:text-slate-400 transition hover:bg-slate-100 dark:hover:bg-slate-800 lg:flex ${collapsed ? 'lg:justify-center lg:px-0' : ''}`}
-                            onClick={() => setCollapsed(!collapsed)}
-                            title={collapsed ? 'Expandir menú' : undefined}
-                            type="button"
-                        >
-                            <Icon className="size-5 shrink-0" name={collapsed ? 'expand' : 'collapse'} />
-                            {!collapsed && <span>Contraer menú</span>}
-                        </button>
+                    <div className="space-y-1 px-2 pb-3">
+                        {!collapsed && <div className="hidden rounded-xl bg-slate-900/5 px-3 py-3 text-xs text-slate-600 dark:bg-black/20 dark:text-slate-300 lg:block"><p className="font-semibold">Prosof SAS</p><p className="mt-1">Panel de despliegues</p></div>}
                     </div>
                 </aside>
 
-                <div className="min-w-0 flex-1">
-                    <header className="flex flex-col gap-3 border-b border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-8">
-                        <div className="flex items-start justify-between gap-3 max-sm:w-full sm:flex-1">
+                <div className="min-w-0 flex-1 p-4 lg:px-0 lg:pb-0">
+                    <main className="mx-auto max-w-6xl space-y-5 rounded-2xl border border-white/80 bg-white/55 px-4 py-5 shadow-sm backdrop-blur-[30px] backdrop-saturate-175 sm:px-6 dark:border-white/15 dark:bg-[#17251a]/75">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                             <div>
                                 <h1 className="font-display text-xl font-extrabold text-neutral-800 dark:text-slate-100">{current.label}</h1>
-                                <p className="hidden text-sm text-slate-500 dark:text-slate-400 sm:block">¡Soluciones que evolucionan!</p>
+                                <p className="hidden text-sm text-slate-600 sm:block dark:text-slate-300">¡Soluciones que evolucionan!</p>
                             </div>
-                            <ThemeToggle />
+                            <button className={`${primaryButton} max-sm:w-full`} onClick={() => setModal(headerAction.modal)} type="button">
+                                <Icon className="size-4" name="plus" />{headerAction.label}
+                            </button>
                         </div>
-                        <button className={`${primaryButton} max-sm:w-full`} onClick={() => setModal(headerAction.modal)} type="button">
-                            <Icon className="size-4" name="plus" />{headerAction.label}
-                        </button>
-                    </header>
-
-                    <main className="mx-auto max-w-6xl space-y-5 px-4 py-6 sm:px-8">
                         {section === 'summary' && (
                             <>
+                                <section className="panel-hero rounded-2xl border-l-4 border-prosof-lime px-5 py-6 shadow-sm ring-1 ring-green-900/10 sm:px-7 dark:ring-white/10">
+                                    <p className="text-xs font-bold uppercase tracking-widest text-prosof-ink dark:text-prosof-lime">Panel de despliegues</p>
+                                    <h2 className="mt-2 text-2xl font-extrabold tracking-tight text-neutral-800 dark:text-white">Control de despliegues</h2>
+                                    <p className="mt-2 text-sm text-slate-700 dark:text-slate-300">Consulta el estado de tus proyectos, servidores y programaciones en un solo lugar.</p>
+                                </section>
                                 <div className="flex gap-3 rounded-xl border-l-4 border-amber-500 bg-amber-50 dark:bg-amber-950/60 px-4 py-3 text-sm text-amber-950 dark:text-amber-100">
                                     <Icon className="mt-0.5 size-5 shrink-0 text-amber-600 dark:text-amber-300" name="alert" />
                                     <p><strong>Validación pendiente:</strong> el agente requiere HTTPS y pruebas en Windows antes de usarse en producción. Si el commit cambia una ruta protegida, se bloqueará el despliegue.</p>
@@ -511,6 +573,7 @@ export default function Panel({ deployments, projects, section, sectionUrls, ser
 
                         {section === 'servers' && <Card title={`Servidores (${servers.length})`}><ServersList servers={servers} showActions /></Card>}
                     </main>
+                </div>
                 </div>
             </div>
 

@@ -14,6 +14,8 @@
     --color-prosof-lime: #a8d42e;
     --color-prosof-green: #8dba38;
     --color-prosof-dark: #79a52b;
+    --color-prosof-action: #4d7d16;
+    --color-prosof-action-hover: #3d6412;
     --color-prosof-gray: #808080;
     --color-prosof-ink: #2f3a14;
 }
@@ -21,12 +23,46 @@
 @layer base {
     :root[data-theme="dark"] {
         color-scheme: dark;
-        background-color: var(--color-slate-950);
+        background-color: #0c1510;
     }
 
     h1,
     h2,
     h3 {
         font-family: var(--font-display);
+    }
+}
+
+@supports (backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px)) {
+    :root:not([data-theme="dark"]) .login-glass {
+        background-color: rgb(255 255 255 / 55%);
+        -webkit-backdrop-filter: blur(30px) saturate(175%);
+        backdrop-filter: blur(30px) saturate(175%);
+    }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+    :root:not([data-theme="dark"]) .login-glass {
+        background-color: white;
+        -webkit-backdrop-filter: none;
+        backdrop-filter: none;
+    }
+}
+
+@layer components {
+    .panel-backdrop {
+        background: radial-gradient(ellipse at top left, #e6f0d7, transparent 52%), #f5f8f2;
+    }
+
+    :root[data-theme="dark"] .panel-backdrop {
+        background: radial-gradient(ellipse at top left, #263c16, transparent 50%), #0c1510;
+    }
+
+    .panel-hero {
+        background: linear-gradient(120deg, #e6f2d3, #f8faf5);
+    }
+
+    :root[data-theme="dark"] .panel-hero {
+        background: linear-gradient(120deg, #304d19, #17271b);
     }
 }

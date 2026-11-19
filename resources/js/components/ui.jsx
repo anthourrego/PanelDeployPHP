@@ -1,9 +1,9 @@
 import { useEffect } from 'react';
 
 export const inputClassName = 'mt-1 w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2 text-base text-slate-900 dark:text-slate-100 outline-none sm:text-sm transition placeholder:text-slate-400 dark:placeholder:text-slate-400 focus:border-prosof-dark focus:ring-2 focus:ring-prosof-lime/40';
-export const primaryButton = 'inline-flex items-center justify-center gap-2 rounded-lg bg-prosof-lime px-4 py-2 text-sm font-bold text-prosof-ink shadow-sm transition hover:bg-prosof-green disabled:cursor-not-allowed disabled:opacity-60';
-export const dangerButton = 'inline-flex items-center justify-center gap-2 rounded-lg border border-red-300 dark:border-red-800 bg-white dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-red-700 dark:text-red-300 transition hover:bg-red-50 dark:hover:bg-red-950/70 disabled:opacity-60';
-export const secondaryButton = 'inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-700 dark:text-slate-200 transition hover:bg-slate-50 dark:hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60';
+export const primaryButton = 'inline-flex items-center justify-center gap-2 rounded-lg bg-prosof-action px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-prosof-action-hover disabled:cursor-not-allowed disabled:opacity-60';
+export const dangerButton = 'inline-flex items-center justify-center gap-2 rounded-lg border border-red-600 dark:border-red-800 bg-red-50 dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-red-800 dark:text-red-300 transition hover:bg-red-100 dark:hover:bg-red-950/70 disabled:opacity-60';
+export const secondaryButton = 'inline-flex items-center justify-center gap-2 rounded-lg border border-slate-500 dark:border-slate-600 bg-slate-100 dark:bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-800 dark:text-slate-200 transition hover:bg-slate-200 dark:hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60';
 
 const icons = {
     sun: 'M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z',
@@ -51,9 +51,9 @@ export function Hint({ children }) {
 
 export function Card({ action, children, title }) {
     return (
-        <section className="rounded-2xl bg-white dark:bg-slate-900 shadow-sm ring-1 ring-slate-200 dark:ring-slate-700">
+        <section className="overflow-hidden rounded-2xl bg-white/90 shadow-sm ring-1 ring-green-900/10 dark:bg-[#17251a] dark:ring-white/15">
             {(title || action) && (
-                <header className="flex items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 px-5 py-4">
+                <header className="flex items-center justify-between gap-3 border-b border-green-900/10 px-5 py-4 dark:border-white/10">
                     <h2 className="text-base font-bold text-neutral-800 dark:text-slate-100">{title}</h2>
                     {action}
                 </header>
@@ -94,7 +94,25 @@ export function StatusBadge({ status }) {
     return <Badge tone={tone}>{label}</Badge>;
 }
 
+let openModalCount = 0;
+let originalBodyOverflow = '';
+
 export function Modal({ children, onClose, title }) {
+    useEffect(() => {
+        if (openModalCount === 0) {
+            originalBodyOverflow = document.body.style.overflow;
+            document.body.style.overflow = 'hidden';
+        }
+        openModalCount += 1;
+
+        return () => {
+            openModalCount -= 1;
+            if (openModalCount === 0) {
+                document.body.style.overflow = originalBodyOverflow;
+            }
+        };
+    }, []);
+
     useEffect(() => {
         const onKey = (event) => event.key === 'Escape' && onClose();
         window.addEventListener('keydown', onKey);
@@ -103,15 +121,15 @@ export function Modal({ children, onClose, title }) {
     }, [onClose]);
 
     return (
-        <div aria-modal="true" className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-neutral-900/50 p-2 sm:p-4 sm:py-12" role="dialog">
-            <div className="w-full max-w-lg rounded-2xl bg-white dark:bg-slate-900 shadow-xl">
-                <header className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 px-4 py-4 sm:px-6">
+        <div aria-modal="true" className="fixed inset-0 z-50 flex items-start justify-center bg-neutral-900/50 p-2 sm:p-4 sm:py-12" role="dialog">
+            <div className="flex max-h-[calc(100dvh-1rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-xl sm:max-h-[calc(100dvh-6rem)] dark:bg-slate-900">
+                <header className="flex shrink-0 items-center justify-between border-b border-slate-100 px-4 py-4 sm:px-6 dark:border-slate-800">
                     <h2 className="font-display text-lg font-bold text-neutral-800 dark:text-slate-100">{title}</h2>
                     <button aria-label="Cerrar" className="rounded-lg p-1.5 text-slate-500 dark:text-slate-400 transition hover:bg-slate-100 dark:hover:bg-slate-800" onClick={onClose} type="button">
                         <Icon name="close" />
                     </button>
                 </header>
-                <div className="px-4 py-5 sm:px-6">{children}</div>
+                <div className="min-h-0 overflow-y-auto overscroll-contain scroll-pb-24 px-4 py-5 sm:px-6">{children}</div>
             </div>
         </div>
     );

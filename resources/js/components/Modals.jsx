@@ -2,9 +2,11 @@ import { useForm } from '@inertiajs/react';
 import { useState } from 'react';
 import { Field, Hint, Icon, Modal, inputClassName, primaryButton, secondaryButton } from './ui';
 
+const modalActionsClassName = 'sticky bottom-[-1.25rem] -mx-4 -mb-5 flex justify-end gap-3 bg-white px-4 pb-5 pt-4 sm:-mx-6 sm:px-6 dark:bg-slate-900';
+
 function Actions({ onClose, processing, submitLabel }) {
     return (
-        <div className="flex justify-end gap-3 pt-2">
+        <div className={modalActionsClassName}>
             <button className={secondaryButton} onClick={onClose} type="button">Cancelar</button>
             <button className={primaryButton} disabled={processing} type="submit">{processing ? 'Guardando…' : submitLabel}</button>
         </div>
@@ -186,7 +188,7 @@ export function TokenModal({ onClose, reveal }) {
                     Este token se muestra <strong>una sola vez</strong>. Cópielo ahora y entréguelo por un canal seguro; si lo pierde deberá generar uno nuevo.
                 </p>
                 <code className="block break-all rounded-lg bg-slate-100 dark:bg-slate-800 px-3 py-3 text-sm text-slate-800 dark:text-slate-200 select-all">{reveal.token}</code>
-                <div className="flex justify-end gap-3">
+                <div className={modalActionsClassName}>
                     <button className={secondaryButton} onClick={copy} type="button"><Icon className="size-4" name="copy" />{copied ? 'Copiado' : 'Copiar'}</button>
                     <button className={primaryButton} onClick={onClose} type="button">Listo</button>
                 </div>

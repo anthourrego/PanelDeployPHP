@@ -1,7 +1,7 @@
 import { Head, useForm } from '@inertiajs/react';
 import ThemeToggle from '../../components/ThemeToggle';
 
-const inputClassName = 'mt-1 w-full rounded-md border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2 text-base text-slate-900 dark:text-slate-100 shadow-sm sm:text-sm outline-none transition focus:border-prosof-dark focus:ring-2 focus:ring-prosof-lime/40';
+const inputClassName = 'mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-base text-slate-900 outline-none transition focus:border-prosof-dark focus:ring-2 focus:ring-prosof-lime/40 dark:border-white/20 dark:bg-[#101b14] dark:text-slate-100';
 
 function Field({ children, error, label }) {
     return (
@@ -29,14 +29,16 @@ export default function Login() {
     return (
         <>
             <Head title="Ingresar" />
-            <main className="flex min-h-screen items-center justify-center bg-slate-100 dark:bg-slate-800 px-4 py-10">
-                <section className="w-full max-w-md rounded-xl bg-white dark:bg-slate-900 p-6 sm:p-8 shadow-sm ring-1 ring-slate-200 dark:ring-slate-700">
-                    <div className="mb-6 flex items-start justify-between gap-4">
-                        <img alt="Prosof" className="h-auto w-52 min-w-0 max-w-[70%] rounded-sm dark:bg-white dark:ring-4 dark:ring-white" src="/img/prosof.png" />
+            <main className="panel-backdrop flex min-h-screen items-center justify-center px-4 py-10">
+                <section className="login-glass w-full max-w-md rounded-3xl border border-white/80 bg-white p-6 shadow-xl shadow-green-950/10 backdrop-blur-sm sm:p-10 dark:border-white/15 dark:bg-[#17251a]/90 dark:shadow-black/25">
+                    <div className="flex justify-end">
                         <ThemeToggle />
                     </div>
-                    <h1 className="text-2xl font-extrabold tracking-tight text-neutral-800 dark:text-slate-100">Panel de despliegues</h1>
-                    <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Ingresa con tu cuenta para continuar.</p>
+                    <div className="flex flex-col items-center text-center">
+                        <img alt="Prosof" className="h-auto w-52 max-w-full p-2" src="/img/prosof-logo.webp" />
+                        <h1 className="mt-8 text-2xl font-extrabold tracking-tight text-neutral-800 dark:text-slate-100">Panel de despliegues</h1>
+                        <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Ingresa con tu cuenta para continuar.</p>
+                    </div>
                     <form className="mt-8 space-y-5" onSubmit={submit}>
                         <Field error={form.errors.email} label="Correo">
                             <input
@@ -59,7 +61,7 @@ export default function Login() {
                             />
                         </Field>
                         <button
-                            className="w-full rounded-md bg-prosof-lime px-4 py-2.5 font-bold text-prosof-ink transition hover:bg-prosof-green disabled:cursor-not-allowed disabled:opacity-60"
+                            className="w-full rounded-full bg-prosof-action px-4 py-3 font-bold text-white transition hover:bg-prosof-action-hover disabled:cursor-not-allowed disabled:opacity-60"
                             disabled={form.processing}
                             type="submit"
                         >

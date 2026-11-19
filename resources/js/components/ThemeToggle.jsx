@@ -25,7 +25,7 @@ export default function ThemeToggle() {
     return (
         <button
             aria-label={label}
-            className="grid size-11 shrink-0 place-items-center rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            className="grid size-11 shrink-0 place-items-center rounded-full border border-slate-500 bg-slate-100 text-slate-800 transition hover:bg-slate-200 dark:border-white/15 dark:bg-[#132016] dark:text-slate-100 dark:hover:bg-[#29402c]"
             onClick={toggle}
             title={label}
             type="button"

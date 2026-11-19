@@ -5,7 +5,7 @@ function currentTheme() {
 }
 
 const buttonClasses = {
-    confirmButton: 'rounded-lg bg-prosof-lime px-5 py-2.5 text-sm font-bold text-prosof-ink hover:bg-prosof-green',
+    confirmButton: 'rounded-lg bg-prosof-action px-5 py-2.5 text-sm font-bold text-white hover:bg-prosof-action-hover',
     cancelButton: 'rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-5 py-2.5 text-sm font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800',
     actions: 'gap-3',
     popup: 'rounded-2xl font-sans',
