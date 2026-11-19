@@ -15,16 +15,59 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\ValidationException;
+use Inertia\Inertia;
+use Inertia\Response;
 use RuntimeException;
 
 class PanelController extends Controller
 {
-    public function index()
+    public function index(string $section): Response
     {
-        return view('panel', [
-            'projects' => Project::with('servers')->orderBy('name')->get(),
-            'servers' => Server::orderBy('name')->get(),
-            'deployments' => Deployment::with(['project', 'targets.server'])->latest('id')->limit(100)->get(),
+        return Inertia::render('Panel', [
+            'section' => $section,
+            'sectionUrls' => [
+                'summary' => route('panel', absolute: false),
+                'deployments' => route('panel.deployments', absolute: false),
+                'projects' => route('panel.projects', absolute: false),
+                'servers' => route('panel.servers', absolute: false),
+            ],
+            'projects' => Project::with('servers')->orderBy('name')->get()->map(fn (Project $project): array => [
+                'id' => $project->id,
+                'name' => $project->name,
+                'owner' => $project->owner,
+                'repository' => $project->repository,
+                'servers' => $project->servers->map(fn (Server $server): array => [
+                    'id' => $server->id,
+                    'name' => $server->name,
+                    'path' => $server->pivot->path,
+                ])->values(),
+                'ssh_url' => $project->ssh_url,
+                'is_active' => $project->is_active,
+                'has_deployments' => $project->deployments()->exists(),
+            ]),
+            'servers' => Server::orderBy('name')->get()->map(fn (Server $server): array => [
+                'id' => $server->id,
+                'name' => $server->name,
+                'last_seen_at' => $server->last_seen_at?->format('Y-m-d H:i:s'),
+                'active_target_id' => $server->active_target_id,
+                'is_active' => $server->is_active,
+                'has_token' => $server->agent_token_hash !== null,
+                'has_history' => $server->targets()->exists(),
+            ]),
+            'deployments' => Deployment::with(['project', 'targets.server'])->latest('id')->limit(100)->get()->map(fn (Deployment $deployment): array => [
+                'id' => $deployment->id,
+                'can_delete' => $deployment->targets->every(fn (DeploymentTarget $target): bool => $target->status === 'cancelled'),
+                'project_name' => $deployment->project->name,
+                'ref' => $deployment->ref,
+                'commit' => $deployment->commit,
+                'scheduled_at' => $deployment->scheduled_at->format('Y-m-d H:i'),
+                'targets' => $deployment->targets->map(fn (DeploymentTarget $target): array => [
+                    'id' => $target->id,
+                    'server_name' => $target->server->name,
+                    'status' => $target->status,
+                    'result' => $target->result,
+                ])->values(),
+            ]),
         ]);
     }
 
@@ -114,9 +157,15 @@ class PanelController extends Controller
             throw ValidationException::withMessages(['scheduled_at' => 'La fecha debe estar en el futuro.']);
         }
         $project = Project::with('servers')->findOrFail($data['project_id']);
+        if (! $project->is_active) {
+            throw ValidationException::withMessages(['project_id' => 'El proyecto está desactivado.']);
+        }
         $servers = $project->servers->whereIn('id', $data['servers']);
         if ($servers->count() !== count($data['servers'])) {
             throw ValidationException::withMessages(['servers' => 'Todos los servidores deben tener una ruta asignada para el proyecto.']);
+        }
+        if ($servers->contains(fn (Server $server): bool => ! $server->is_active)) {
+            throw ValidationException::withMessages(['servers' => 'No se puede programar en un servidor desactivado.']);
         }
 
         $repositoryUrl = $project->ssh_url ?: $project->gitea_url.'/'.$project->owner.'/'.$project->repository.'.git';
@@ -181,24 +230,128 @@ class PanelController extends Controller
 
     public function cancelTarget(Request $request, DeploymentTarget $target)
     {
-        $cancelled = DB::transaction(function () use ($request, $target) {
+        if (! $this->cancelPendingTarget($target, $request->user()->email)) {
+            throw ValidationException::withMessages(['target' => 'Solo se pueden cancelar trabajos pendientes.']);
+        }
+
+        return back()->with('success', 'Trabajo pendiente cancelado.');
+    }
+
+    public function cancelDeployment(Request $request, Deployment $deployment)
+    {
+        $cancelled = $deployment->targets()->get()->filter(fn (DeploymentTarget $target): bool => $this->cancelPendingTarget($target, $request->user()->email))->count();
+        if ($cancelled === 0) {
+            throw ValidationException::withMessages(['deployment' => 'La programación no tiene trabajos pendientes.']);
+        }
+
+        return back()->with('success', 'Programación cancelada.');
+    }
+
+    public function destroyDeployment(Deployment $deployment)
+    {
+        DB::transaction(function () use ($deployment) {
+            $targets = $deployment->targets()->lockForUpdate()->get();
+            if ($targets->contains(fn (DeploymentTarget $target): bool => $target->status !== 'cancelled')) {
+                throw ValidationException::withMessages(['deployment' => 'Solo se pueden eliminar programaciones canceladas; las demás forman parte del historial.']);
+            }
+            DB::table('deployment_reservations')->whereIn('deployment_target_id', $targets->modelKeys())->delete();
+            $deployment->targets()->delete();
+            $deployment->delete();
+        }, 3);
+
+        return back()->with('success', 'Programación eliminada.');
+    }
+
+    public function toggleServer(Request $request, Server $server)
+    {
+        $active = $request->validate(['is_active' => ['required', 'boolean']])['is_active'];
+        if (! $active && $server->active_target_id !== null) {
+            throw ValidationException::withMessages(['server' => 'El servidor tiene un trabajo en ejecución; espere a que termine.']);
+        }
+        $server->update(['is_active' => $active]);
+
+        return back()->with('success', $active ? 'Servidor activado.' : 'Servidor desactivado; los trabajos pendientes quedan en espera.');
+    }
+
+    public function agentToken(Server $server)
+    {
+        if ($server->active_target_id !== null) {
+            throw ValidationException::withMessages(['server' => 'No se puede cambiar el token mientras existe un trabajo en ejecución.']);
+        }
+        $token = $server->rotateAgentToken();
+        if ($token === null) {
+            throw ValidationException::withMessages(['server' => 'El servidor ahora tiene un trabajo activo; no se cambió el token.']);
+        }
+        Inertia::flash('agent_token', ['server' => $server->name, 'token' => $token]);
+
+        return back()->with('success', 'Token generado. Cópielo ahora: no se volverá a mostrar.');
+    }
+
+    public function destroyServer(Server $server)
+    {
+        DB::transaction(function () use ($server) {
+            $server = Server::whereKey($server->id)->lockForUpdate()->firstOrFail();
+            if ($server->active_target_id !== null || $server->targets()->exists()) {
+                throw ValidationException::withMessages(['server' => 'El servidor tiene historial de despliegues; desactívelo en lugar de eliminarlo.']);
+            }
+            $server->projects()->detach();
+            $server->delete();
+        }, 3);
+
+        return back()->with('success', 'Servidor eliminado.');
+    }
+
+    public function toggleProject(Request $request, Project $project)
+    {
+        $active = $request->validate(['is_active' => ['required', 'boolean']])['is_active'];
+        $project->update(['is_active' => $active]);
+
+        return back()->with('success', $active ? 'Proyecto activado.' : 'Proyecto desactivado.');
+    }
+
+    public function destroyProject(Project $project)
+    {
+        DB::transaction(function () use ($project) {
+            $project = Project::whereKey($project->id)->lockForUpdate()->firstOrFail();
+            if ($project->deployments()->exists()) {
+                throw ValidationException::withMessages(['project' => 'El proyecto tiene historial de despliegues; desactívelo en lugar de eliminarlo.']);
+            }
+            $project->servers()->detach();
+            $project->delete();
+        }, 3);
+
+        return back()->with('success', 'Proyecto eliminado.');
+    }
+
+    public function removeAssignment(Project $project, Server $server)
+    {
+        $inUse = DeploymentTarget::where('server_id', $server->id)
+            ->whereIn('status', ['pending', 'running'])
+            ->whereHas('deployment', fn ($query) => $query->where('project_id', $project->id))
+            ->exists();
+        if ($inUse) {
+            throw ValidationException::withMessages(['assignment' => 'Hay trabajos pendientes o en ejecución para esta ruta; cancélelos primero.']);
+        }
+        $project->servers()->detach($server->id);
+
+        return back()->with('success', 'Ruta eliminada del proyecto.');
+    }
+
+    private function cancelPendingTarget(DeploymentTarget $target, string $email): bool
+    {
+        return DB::transaction(function () use ($target, $email) {
             Server::whereKey($target->server_id)->lockForUpdate()->firstOrFail();
             $target = DeploymentTarget::whereKey($target->id)->lockForUpdate()->firstOrFail();
             if ($target->status !== 'pending') {
                 return false;
             }
             $target->status = 'cancelled';
-            $target->result = 'Cancelado por '.$request->user()->email;
+            $target->result = 'Cancelado por '.$email;
             $target->finished_at = now();
             $target->save();
             DB::table('deployment_reservations')->where('deployment_target_id', $target->id)->delete();
 
             return true;
         }, 3);
-        if (! $cancelled) {
-            throw ValidationException::withMessages(['target' => 'Solo se pueden cancelar trabajos pendientes.']);
-        }
-
-        return back()->with('success', 'Trabajo pendiente cancelado.');
     }
 }

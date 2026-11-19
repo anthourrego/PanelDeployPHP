@@ -2,8 +2,31 @@
 
 @source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
 @source '../../storage/framework/views/*.php';
+@source '../js/**/*.{js,jsx}';
+
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 @theme {
-    --font-sans: 'Instrument Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
+    --font-sans: 'Open Sans', ui-sans-serif, system-ui, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
         'Segoe UI Symbol', 'Noto Color Emoji';
+    --font-display: 'Manrope', 'Open Sans', ui-sans-serif, system-ui, sans-serif;
+
+    --color-prosof-lime: #a8d42e;
+    --color-prosof-green: #8dba38;
+    --color-prosof-dark: #79a52b;
+    --color-prosof-gray: #808080;
+    --color-prosof-ink: #2f3a14;
+}
+
+@layer base {
+    :root[data-theme="dark"] {
+        color-scheme: dark;
+        background-color: var(--color-slate-950);
+    }
+
+    h1,
+    h2,
+    h3 {
+        font-family: var(--font-display);
+    }
 }

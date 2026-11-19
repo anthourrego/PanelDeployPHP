@@ -24,6 +24,9 @@ class AgentController extends Controller
             if ($server->active_target_id !== null) {
                 return response()->json(['state' => 'busy', 'target_id' => $server->active_target_id]);
             }
+            if (! $server->is_active) {
+                return response()->json(['state' => 'idle']);
+            }
             $target = DeploymentTarget::where('server_id', $serverId)
                 ->where('status', 'pending')
                 ->whereHas('deployment', fn ($query) => $query->where('scheduled_at', '<=', now()))

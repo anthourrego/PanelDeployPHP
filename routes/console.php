@@ -46,18 +46,13 @@ Artisan::command('panel:agent-token {server_id}', function () {
     if ($server->agent_token_hash && ! $this->confirm('Esto revocará el token anterior. ¿Continuar?', false)) {
         return 1;
     }
-    $secret = bin2hex(random_bytes(32));
-    $query = Server::whereKey($server->id)->whereNull('active_target_id');
-    $server->agent_token_hash
-        ? $query->where('agent_token_hash', $server->agent_token_hash)
-        : $query->whereNull('agent_token_hash');
-    $updated = $query->update(['agent_token_hash' => hash('sha256', $secret)]);
-    if ($updated !== 1) {
+    $token = $server->rotateAgentToken();
+    if ($token === null) {
         $this->error('El servidor ahora tiene un trabajo activo; no se cambió el token.');
 
         return 1;
     }
-    $this->line('Token (se muestra una sola vez): '.$server->id.'.'.$secret);
+    $this->line('Token (se muestra una sola vez): '.$token);
 
     return 0;
 })->purpose('Generar o rotar el token de un servidor');

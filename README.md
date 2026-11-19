@@ -4,7 +4,11 @@ Panel Laravel y agente PowerShell para programar un commit de Gitea en repositor
 
 ## Panel
 
-Requiere PHP 8.3 o superior, Composer y SQLite o una base compatible con Laravel. Para desarrollo local: `composer install`, copiar `.env.example` a `.env` si falta, ejecutar `php artisan key:generate` una sola vez, `php artisan migrate` y `php artisan panel:create-user`. `php artisan serve` sirve únicamente para desarrollo. Las programaciones existentes pueden ejecutarse en cuanto un agente configurado se conecte.
+El resumen abre en `/`. También puede acceder directamente a `/programaciones`, `/proyectos` y `/servidores`; al recargar se conserva la sección indicada por la URL.
+
+Use el botón de sol o luna en la cabecera del panel o en el inicio de sesión para cambiar entre tema claro y oscuro. La preferencia se guarda en el navegador; el tema inicial es claro.
+
+Requiere PHP 8.3 o superior, Composer, Node.js y SQLite o una base compatible con Laravel. Para desarrollo local: `composer install`, `npm install`, copiar `.env.example` a `.env` si falta, ejecutar `php artisan key:generate` una sola vez, `php artisan migrate` y `php artisan panel:create-user`. Ejecute `php artisan serve` y `npm run dev` en terminales separadas; ambos comandos sirven únicamente para desarrollo. Para compilar los recursos de producción ejecute `npm run build`. Las programaciones existentes pueden ejecutarse en cuanto un agente configurado se conecte.
 
 En producción configure HTTPS con certificado confiable para el panel, `APP_ENV=production`, `APP_DEBUG=false`, `APP_URL` HTTPS y `SESSION_SECURE_COOKIE=true`. Bloquee HTTP hacia el panel en la red: rechazar una petición HTTP en Laravel no impide que un token enviado por error haya viajado sin cifrar. Si HTTPS termina en un proxy, configure explícitamente solo las direcciones de proxies confiables en Laravel y bloquee el acceso directo; de lo contrario el panel rechazará las peticiones del agente. Proteja `.env`, la base, los logs y sus copias. No regenere `APP_KEY` en una instalación existente porque cifra los tokens Gitea.
 
