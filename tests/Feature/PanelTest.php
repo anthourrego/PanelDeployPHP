@@ -737,15 +737,91 @@ class PanelTest extends TestCase
         ]);
     }
 
+    public function test_deployment_references_list_branches_and_tags_without_commits(): void
+    {
+        $project = $this->makeProject();
+        $sha = str_repeat('a', 40);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://gitea.test/api/v1/repos/team/app/branches?*' => Http::response([
+                ['name' => 'release/stable', 'commit' => ['id' => $sha]],
+            ]),
+            'https://gitea.test/api/v1/repos/team/app/tags?*' => Http::response([
+                ['name' => 'stable', 'commit' => ['sha' => $sha]],
+                ['name' => 'v2.0.0', 'commit' => ['sha' => $sha]],
+            ]),
+        ]);
+        $url = route('projects.references', $project);
+
+        $this->get($url)->assertRedirectToRoute('login');
+        Http::assertNothingSent();
+        $this->actingAs(User::factory()->create())->getJson($url)
+            ->assertOk()->assertExactJson(['branches' => ['release/stable'], 'tags' => ['v2.0.0', 'stable']]);
+    }
+
+    public function test_deployment_selector_limits_tags_after_sorting_all_pages_without_limiting_branches(): void
+    {
+        $project = $this->makeProject();
+        $sha = str_repeat('a', 40);
+        $tags = fn (array $versions): array => array_map(
+            fn (int $version): array => ['name' => "v1.0.{$version}", 'commit' => ['sha' => $sha]],
+            $versions,
+        );
+        $branches = array_map(fn (int $number): string => "release/{$number}", range(22, 1));
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://gitea.test/api/v1/repos/team/app/branches?*' => Http::response(array_map(
+                fn (string $branch): array => ['name' => $branch, 'commit' => ['id' => $sha]],
+                array_reverse($branches),
+            )),
+            'https://gitea.test/api/v1/repos/team/app/tags?*' => Http::sequence()
+                ->push($tags(range(1, 50)))
+                ->push($tags([51])),
+        ]);
+
+        $this->actingAs(User::factory()->create())->getJson(route('projects.references', $project))
+            ->assertOk()->assertExactJson([
+                'branches' => $branches,
+                'tags' => array_map(fn (int $version): string => "v1.0.{$version}", range(51, 32)),
+            ]);
+    }
+
+    public function test_deployment_accepts_a_tag_but_rejects_a_raw_commit_and_missing_tag(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->makeProject();
+        $server = Server::create(['name' => 'Servidor']);
+        $project->servers()->attach($server, ['path' => 'C:\\app']);
+        $sha = str_repeat('a', 40);
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://gitea.test/api/v1/repos/team/app/tags?*' => Http::response([
+                ['name' => 'release/stable', 'commit' => ['sha' => $sha]],
+            ]),
+        ]);
+        $data = [
+            'project_id' => $project->id, 'servers' => [$server->id],
+            'scheduled_at' => now()->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'UTC',
+        ];
+
+        $this->actingAs($user)->post('/deployments', $data + ['ref' => $sha])->assertInvalid(['ref']);
+        Http::assertNothingSent();
+        $this->post('/deployments', $data + ['ref' => 'refs/tags/missing'])->assertInvalid(['ref']);
+        $this->post('/deployments', $data + ['ref' => 'refs/tags/release/stable'])->assertSessionHasNoErrors();
+
+        $this->assertDatabaseCount('deployments', 1);
+        $this->assertDatabaseHas('deployments', ['ref' => 'refs/tags/release/stable', 'commit' => $sha]);
+    }
+
     public function test_programming_pins_commit_and_snapshots_each_target(): void
     {
-        Http::fake(['*' => Http::response(['sha' => str_repeat('a', 40)])]);
+        Http::fake(['*' => Http::response([['name' => 'main', 'commit' => ['id' => str_repeat('a', 40)]]])]);
         $user = User::factory()->create();
         $project = Project::create(['name' => 'Proyecto', 'gitea_url' => 'https://gitea.test', 'owner' => 'team', 'repository' => 'app', 'preserved_paths' => ['uploads']]);
         $server = Server::create(['name' => 'Servidor']);
         $this->actingAs($user)->post('/assignments', ['project_id' => $project->id, 'server_id' => $server->id, 'path' => 'C:\\wamp64\\www\\app'])->assertSessionHasNoErrors();
         $this->actingAs($user)->post('/deployments', [
-            'project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'main',
+            'project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'refs/heads/main',
             'scheduled_at' => now('America/Bogota')->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'America/Bogota',
         ])->assertSessionHasNoErrors();
         $deployment = Deployment::firstOrFail();
@@ -753,11 +829,11 @@ class PanelTest extends TestCase
             'id' => $project->id,
             'latest_deployment_id' => $deployment->id,
         ]);
-        $this->assertDatabaseHas('deployments', ['commit' => str_repeat('a', 40), 'ref' => 'main']);
+        $this->assertDatabaseHas('deployments', ['commit' => str_repeat('a', 40), 'ref' => 'refs/heads/main']);
         $this->assertDatabaseHas('deployment_targets', ['server_id' => $server->id, 'status' => 'pending', 'path' => 'C:\\wamp64\\www\\app']);
         $this->assertSame(['uploads'], DeploymentTarget::firstOrFail()->preserved_paths);
         $this->actingAs($user)->post('/deployments', [
-            'project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'main',
+            'project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'refs/heads/main',
             'scheduled_at' => now('America/Bogota')->addDays(2)->format('Y-m-d\TH:i'), 'timezone' => 'America/Bogota',
         ])->assertSessionHasErrors('servers');
         $this->assertDatabaseCount('deployments', 1);
@@ -774,7 +850,7 @@ class PanelTest extends TestCase
         $this->actingAs($user)->get('/proyectos')->assertInertia(fn (Assert $page) => $page
             ->component('Panel')
             ->has('projects', 1, fn (Assert $projectPage) => $projectPage
-                ->where('latest_deployment.ref', 'main')
+                ->where('latest_deployment.ref', 'refs/heads/main')
                 ->where('latest_deployment.commit', str_repeat('b', 40))
                 ->where('latest_deployment.targets.0.server_name', 'Servidor')
                 ->where('latest_deployment.targets.0.status', 'succeeded')
@@ -838,7 +914,7 @@ class PanelTest extends TestCase
         Http::fake(['*' => Http::response([], 404)]);
         $project = Project::create(['name' => 'Proyecto', 'gitea_url' => 'https://gitea.test', 'owner' => 'team', 'repository' => 'app', 'preserved_paths' => []]);
         $server = Server::create(['name' => 'Servidor']);
-        $data = ['project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'missing', 'scheduled_at' => now()->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'UTC'];
+        $data = ['project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'refs/heads/missing', 'scheduled_at' => now()->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'UTC'];
         $this->actingAs(User::factory()->create())->post('/deployments', $data)->assertSessionHasErrors('servers');
         $project->servers()->attach($server, ['path' => 'C:\\app']);
         $this->post('/deployments', $data)->assertSessionHasErrors('ref');
@@ -847,10 +923,10 @@ class PanelTest extends TestCase
 
     private function scheduledDeployment(User $user, Project $project, Server $server): void
     {
-        Http::fake(['*' => Http::response(['sha' => str_repeat('b', 40)])]);
+        Http::fake(['*' => Http::response([['name' => 'main', 'commit' => ['id' => str_repeat('b', 40)]]])]);
         $project->servers()->syncWithoutDetaching([$server->id => ['path' => 'C:\\app']]);
         $this->actingAs($user)->post('/deployments', [
-            'project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'main',
+            'project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'refs/heads/main',
             'scheduled_at' => now()->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'UTC',
         ])->assertSessionHasNoErrors();
     }
@@ -866,7 +942,7 @@ class PanelTest extends TestCase
         $project = $this->makeProject();
         $server = Server::create(['name' => 'Servidor']);
         $project->servers()->attach($server, ['path' => 'C:\\app']);
-        $data = ['project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'main', 'scheduled_at' => now()->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'UTC'];
+        $data = ['project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'refs/heads/main', 'scheduled_at' => now()->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'UTC'];
 
         $this->actingAs($user)->post("/servers/{$server->id}/active", ['is_active' => false])->assertSessionHasNoErrors();
         $this->post('/deployments', $data)->assertSessionHasErrors('servers');

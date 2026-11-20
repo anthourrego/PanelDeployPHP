@@ -25,7 +25,7 @@ class SshRepository
 
     public function resolve(string $url, string $reference): string
     {
-        if (! preg_match('/\A(?:[a-fA-F0-9]{40}|[A-Za-z0-9_][A-Za-z0-9._\/-]*)\z/D', $reference)) {
+        if (! preg_match('~\A(?:refs/(?:heads|tags)/[^\x00-\x20\x7f]+|[A-Za-z0-9_][A-Za-z0-9._/-]*)\z~D', $reference)) {
             throw new RuntimeException('La referencia no es válida.');
         }
         $scratch = storage_path('app/private/git-'.Str::uuid());
@@ -89,6 +89,23 @@ class SshRepository
      */
     public function listTags(string $url, string $owner, string $repository): array
     {
+        return $this->listReferences($url, $owner, $repository, 'tags');
+    }
+
+    /**
+     * @return list<array{name: string, commit: string}>
+     */
+    public function listBranches(string $url, string $owner, string $repository): array
+    {
+        return $this->listReferences($url, $owner, $repository, 'heads');
+    }
+
+    /**
+     * @param  'heads'|'tags'  $namespace
+     * @return list<array{name: string, commit: string}>
+     */
+    private function listReferences(string $url, string $owner, string $repository, string $namespace): array
+    {
         if (! self::validUrl($url, $owner, $repository)) {
             throw new RuntimeException('La URL SSH no corresponde al repositorio configurado.');
         }
@@ -100,8 +117,8 @@ class SshRepository
 
         try {
             $this->git(['init', '--bare', '--quiet', $scratch], $scratch);
-            $advertisement = $this->git(['ls-remote', '--tags', '--', $url], $scratch, 15);
-            $tagObjects = [];
+            $advertisement = $this->git(['ls-remote', '--'.$namespace, '--', $url], $scratch, 15);
+            $objects = [];
             $peeledTags = [];
 
             foreach (preg_split('/\R/', trim($advertisement)) as $line) {
@@ -109,8 +126,8 @@ class SshRepository
                     continue;
                 }
 
-                if (! preg_match('/\A([a-f0-9]{40})\trefs\/tags\/(.+)\z/iD', $line, $match)) {
-                    throw new RuntimeException('Git devolvió una lista de tags inválida.');
+                if (! preg_match('~\A([a-f0-9]{40})\trefs/'.$namespace.'/(.+)\z~iD', $line, $match)) {
+                    throw new RuntimeException('Git devolvió una lista de referencias inválida.');
                 }
 
                 $reference = $match[2];
@@ -122,19 +139,19 @@ class SshRepository
                 if (str_ends_with($reference, '^{}')) {
                     $peeledTags[$tagName] = $sha;
                 } else {
-                    $tagObjects[$tagName] = $sha;
+                    $objects[$tagName] = $sha;
                 }
             }
 
-            $tags = [];
-            foreach ($tagObjects as $tagName => $sha) {
-                $tags[] = [
-                    'name' => $tagName,
-                    'commit' => $peeledTags[$tagName] ?? $sha,
+            $references = [];
+            foreach ($objects as $name => $sha) {
+                $references[] = [
+                    'name' => (string) $name,
+                    'commit' => $peeledTags[$name] ?? $sha,
                 ];
             }
 
-            return $tags;
+            return $references;
         } finally {
             File::deleteDirectory($scratch);
         }

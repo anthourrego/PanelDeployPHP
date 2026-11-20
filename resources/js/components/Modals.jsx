@@ -1,14 +1,14 @@
 import { useForm } from '@inertiajs/react';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Field, Hint, Icon, Modal, inputClassName, primaryButton, secondaryButton } from './ui';
 
 const modalActionsClassName = 'sticky bottom-[-1.25rem] -mx-4 -mb-5 flex justify-end gap-3 bg-white px-4 pb-5 pt-4 sm:-mx-6 sm:px-6 dark:bg-slate-900';
 
-function Actions({ onClose, processing, submitLabel }) {
+function Actions({ disabled, onClose, processing, submitLabel }) {
     return (
         <div className={modalActionsClassName}>
             <button className={secondaryButton} onClick={onClose} type="button">Cancelar</button>
-            <button className={primaryButton} disabled={processing} type="submit">{processing ? 'Guardando…' : submitLabel}</button>
+            <button className={primaryButton} disabled={disabled || processing} type="submit">{processing ? 'Guardando…' : submitLabel}</button>
         </div>
     );
 }
@@ -137,6 +137,45 @@ export function DeploymentModal({ onClose, projects, servers }) {
     const { form, submit } = useModalForm({
         project_id: '', ref: '', scheduled_at: '', timezone: 'America/Bogota', servers: [],
     }, '/deployments', onClose, []);
+    const [references, setReferences] = useState(null);
+    const [referenceError, setReferenceError] = useState('');
+    const [reload, setReload] = useState(0);
+    const referencesUrl = projects.find((project) => String(project.id) === form.data.project_id)?.references_url;
+
+    useEffect(() => {
+        if (!referencesUrl) return;
+
+        const controller = new AbortController();
+        async function loadReferences() {
+            try {
+                const response = await fetch(referencesUrl, {
+                    headers: { Accept: 'application/json' },
+                    signal: controller.signal,
+                });
+                if (!response.ok) throw new Error('No se pudo consultar el repositorio.');
+
+                const result = await response.json();
+                if (!controller.signal.aborted) setReferences(result);
+            } catch {
+                if (!controller.signal.aborted) {
+                    setReferenceError('No se pudieron cargar las ramas y etiquetas. Verifique la conexión con el repositorio e intente de nuevo.');
+                }
+            }
+        }
+        loadReferences();
+
+        return () => controller.abort();
+    }, [referencesUrl, reload]);
+
+    function changeProject(projectId) {
+        setReferences(null);
+        setReferenceError('');
+        form.clearErrors('project_id', 'ref');
+        form.setData({ ...form.data, project_id: projectId, ref: '' });
+    }
+
+    const hasReferences = references && (references.tags.length > 0 || references.branches.length > 0);
+    const loadingReferences = Boolean(referencesUrl && !references && !referenceError);
 
     function toggleServer(serverId, checked) {
         const selected = form.data.servers;
@@ -147,15 +186,40 @@ export function DeploymentModal({ onClose, projects, servers }) {
         <Modal onClose={onClose} title="Programar despliegue">
             <form className="space-y-4" onSubmit={submit}>
                 <Field error={form.errors.project_id} label="Proyecto">
-                    <select className={inputClassName} onChange={(event) => form.setData('project_id', event.target.value)} required value={form.data.project_id}>
+                    <select className={inputClassName} onChange={(event) => changeProject(event.target.value)} required value={form.data.project_id}>
                         <option value="">Seleccione</option>
                         {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
                     </select>
                 </Field>
-                <Field error={form.errors.ref} label="Referencia de Gitea (rama, etiqueta o commit)">
-                    <Bind form={form} name="ref" required />
-                    <Hint>Se consulta Gitea y se guarda el SHA exacto.</Hint>
+                <Field error={form.errors.ref} label="Rama o etiqueta">
+                    <select aria-busy={loadingReferences} className={inputClassName} disabled={!hasReferences} onChange={(event) => form.setData('ref', event.target.value)} required value={form.data.ref}>
+                        <option value="">{loadingReferences ? 'Consultando el repositorio…' : !referencesUrl ? 'Seleccione un proyecto primero' : 'Seleccione una rama o etiqueta'}</option>
+                        {references?.tags.length > 0 && (
+                            <optgroup label="Etiquetas (tags)">
+                                {references.tags.map((name) => <option key={name} value={`refs/tags/${name}`}>{name}</option>)}
+                            </optgroup>
+                        )}
+                        {references?.branches.length > 0 && (
+                            <optgroup label="Ramas">
+                                {references.branches.map((name) => <option key={name} value={`refs/heads/${name}`}>{name}</option>)}
+                            </optgroup>
+                        )}
+                    </select>
+                    <Hint>Se desplegará la versión que tenga la rama o etiqueta al guardar la programación.</Hint>
                 </Field>
+                {loadingReferences && (
+                    <div className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200" role="status">
+                        <Icon className="size-5 shrink-0 text-prosof-dark motion-safe:animate-spin dark:text-prosof-lime" name="refresh" />
+                        <span>Consultando ramas y etiquetas, espera un momento…</span>
+                    </div>
+                )}
+                {references && !hasReferences && <p className="text-sm text-slate-600 dark:text-slate-300" role="status">No se encontraron ramas ni etiquetas.</p>}
+                {referenceError && (
+                    <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm text-red-700 dark:text-red-300" role="alert">{referenceError}</p>
+                        <button className={secondaryButton} onClick={() => { setReferenceError(''); setReload((current) => current + 1); }} type="button">Reintentar</button>
+                    </div>
+                )}
                 <div className="grid gap-4 sm:grid-cols-2">
                     <Field error={form.errors.scheduled_at} label="Fecha y hora"><Bind form={form} name="scheduled_at" required type="datetime-local" /></Field>
                     <Field error={form.errors.timezone} label="Zona horaria">
@@ -178,7 +242,7 @@ export function DeploymentModal({ onClose, projects, servers }) {
                     )) : <p className="text-sm text-slate-500 dark:text-slate-400">Registre un servidor primero.</p>}
                     {form.errors.servers && <p className="text-sm text-red-700 dark:text-red-300">{form.errors.servers}</p>}
                 </fieldset>
-                <Actions onClose={onClose} processing={form.processing} submitLabel="Guardar programación" />
+                <Actions disabled={!form.data.ref} onClose={onClose} processing={form.processing} submitLabel="Guardar programación" />
             </form>
         </Modal>
     );

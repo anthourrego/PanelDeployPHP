@@ -45,6 +45,9 @@ Route::middleware(['auth', EnsureActiveUser::class])->group(function () {
     Route::get('/servidores/descargas/windows/{package}', [PanelController::class, 'downloadWindowsAgent'])->name('servers.agent.download');
     Route::post('/projects', [PanelController::class, 'project'])->name('projects.store');
     Route::post('/projects/{project}/ssh', [PanelController::class, 'sshRepository'])->name('projects.ssh');
+    Route::get('/projects/{project}/references', [PanelController::class, 'projectReferences'])
+        ->middleware('throttle:20,1,project-references:')
+        ->name('projects.references');
     Route::post('/projects/tags/sync-all', [PanelController::class, 'syncAllProjectTags'])
         ->middleware('throttle:2,1,project-tags-sync-all:')
         ->name('projects.tags.sync-all');

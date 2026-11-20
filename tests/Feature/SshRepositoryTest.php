@@ -102,8 +102,10 @@ class SshRepositoryTest extends TestCase
         $project = Project::create(['name' => 'Proyecto', 'gitea_url' => 'http://gitea.test', 'owner' => 'team', 'repository' => 'app', 'ssh_url' => 'git@gitea.test:team/app.git', 'preserved_paths' => []]);
         $server = Server::create(['name' => 'Servidor']);
         $project->servers()->attach($server, ['path' => 'C:\\app']);
-        $this->actingAs(User::factory()->create())->post('/deployments', [
-            'project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'main',
+        $this->actingAs(User::factory()->create())->getJson(route('projects.references', $project))
+            ->assertOk()->assertExactJson(['branches' => ['main'], 'tags' => ['v1.10.0', 'v1.9.9', 'v1']]);
+        $this->post('/deployments', [
+            'project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'refs/tags/v1',
             'scheduled_at' => now()->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'UTC',
         ])->assertSessionHasNoErrors();
         $this->assertDatabaseHas('deployments', ['repository_url' => 'git@gitea.test:team/app.git', 'commit' => $this->git(['rev-parse', 'HEAD'])]);
@@ -127,7 +129,7 @@ class SshRepositoryTest extends TestCase
         $server = Server::create(['name' => 'Servidor']);
         $project->servers()->attach($server, ['path' => 'C:\\app']);
         $this->actingAs(User::factory()->create())->post('/deployments', [
-            'project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'main',
+            'project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'refs/heads/main',
             'scheduled_at' => now()->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'UTC',
         ])->assertSessionHasErrors('ref');
         $this->assertDatabaseCount('deployments', 0);

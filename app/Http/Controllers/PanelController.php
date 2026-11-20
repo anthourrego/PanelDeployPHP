@@ -14,13 +14,14 @@ use App\Services\WindowsAgentDownloads;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\Client\RequestException;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Validation\Rule;
 use Illuminate\Validation\Rules\Password;
@@ -72,6 +73,7 @@ class PanelController extends Controller
                 'name' => $project->name,
                 'owner' => $project->owner,
                 'repository' => $project->repository,
+                'references_url' => route('projects.references', $project, absolute: false),
                 'servers' => $project->servers->map(fn (Server $server): array => [
                     'id' => $server->id,
                     'name' => $server->name,
@@ -451,16 +453,33 @@ class PanelController extends Controller
         return back()->with('success', 'Ruta del servidor guardada.');
     }
 
-    public function deployment(Request $request)
+    public function projectReferences(Project $project, ProjectTagSyncService $repository): JsonResponse
+    {
+        abort_unless($project->is_active, 404);
+
+        try {
+            return response()->json($repository->references($project))
+                ->header('Cache-Control', 'no-store');
+        } catch (ConnectionException|RequestException|RuntimeException $exception) {
+            Log::warning('No se pudieron consultar las referencias para el despliegue.', [
+                'project_id' => $project->id,
+                'error_type' => get_class($exception),
+            ]);
+
+            return response()->json(['message' => 'No se pudieron cargar las ramas y etiquetas. Verifique la conexión con el repositorio.'], 502);
+        }
+    }
+
+    public function deployment(Request $request, ProjectTagSyncService $repository): RedirectResponse
     {
         $data = $request->validate([
             'project_id' => ['required', 'exists:projects,id'],
             'servers' => ['required', 'array', 'min:1'],
             'servers.*' => ['required', 'distinct', 'exists:servers,id'],
-            'ref' => ['required', 'string', 'max:255'],
+            'ref' => ['required', 'string', 'max:255', 'regex:~\Arefs/(?:heads|tags)/[^\x00-\x20\x7f]+\z~'],
             'scheduled_at' => ['required', 'date_format:Y-m-d\TH:i'],
             'timezone' => ['required', 'timezone'],
-        ]);
+        ], ['ref.regex' => 'Seleccione una rama o etiqueta del proyecto.']);
         $scheduledAt = CarbonImmutable::createFromFormat('!Y-m-d\TH:i', $data['scheduled_at'], $data['timezone']);
         if ($scheduledAt->format('Y-m-d\TH:i') !== $data['scheduled_at']) {
             throw ValidationException::withMessages(['scheduled_at' => 'La hora no existe en la zona horaria indicada.']);
@@ -481,33 +500,14 @@ class PanelController extends Controller
         }
 
         $repositoryUrl = $project->ssh_url ?: $project->gitea_url.'/'.$project->owner.'/'.$project->repository.'.git';
-        if ($project->ssh_url) {
-            try {
-                $sha = app(SshRepository::class)->resolve($project->ssh_url, $data['ref']);
-            } catch (RuntimeException $e) {
-                Log::warning('No se pudo resolver la referencia SSH.', ['project_id' => $project->id, 'error_type' => get_class($e)]);
-                throw ValidationException::withMessages(['ref' => 'No se pudo resolver la referencia por SSH. Verifique la clave, la huella y la referencia; si hay ambigüedad use refs/heads/... o refs/tags/....']);
-            }
-        } else {
-            if (parse_url($project->gitea_url, PHP_URL_SCHEME) !== 'https') {
-                throw ValidationException::withMessages(['ref' => 'Configure SSH para el proyecto o use HTTPS confiable para consultar Gitea.']);
-            }
-            $url = $project->gitea_url.'/api/v1/repos/'.rawurlencode($project->owner).'/'.rawurlencode($project->repository).'/commits/'.rawurlencode($data['ref']);
-            try {
-                $http = Http::timeout(10)->withoutRedirecting()->acceptJson();
-                if ($project->gitea_token) {
-                    $http = $http->withToken($project->gitea_token);
-                }
-                $response = $http->get($url);
-            } catch (ConnectionException $e) {
-                Log::warning('No se pudo conectar con Gitea.', ['project_id' => $project->id, 'error' => $e->getMessage()]);
-                throw ValidationException::withMessages(['ref' => 'No se pudo conectar con Gitea. Verifique la conexión.']);
-            }
-            $sha = $response->json('sha');
-            if (! $response->successful() || ! is_string($sha) || ! preg_match('/^[a-f0-9]{40}$/i', $sha)) {
-                Log::warning('Gitea no resolvió la referencia.', ['project_id' => $project->id, 'status' => $response->status()]);
-                throw ValidationException::withMessages(['ref' => 'Gitea no pudo resolver la referencia a un commit válido.']);
-            }
+        try {
+            $sha = $repository->resolve($project, $data['ref']);
+        } catch (ConnectionException|RequestException|RuntimeException $exception) {
+            Log::warning('No se pudo resolver la referencia del despliegue.', [
+                'project_id' => $project->id,
+                'error_type' => get_class($exception),
+            ]);
+            throw ValidationException::withMessages(['ref' => 'No se pudo verificar la rama o etiqueta seleccionada. Verifique que siga disponible en el repositorio.']);
         }
         try {
             DB::transaction(function () use ($project, $servers, $data, $sha, $scheduledAt, $request, $repositoryUrl) {

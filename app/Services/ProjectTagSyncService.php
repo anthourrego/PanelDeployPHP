@@ -15,14 +15,14 @@ class ProjectTagSyncService
 
     private const MAX_PAGES = 20;
 
+    private const SELECTOR_TAG_LIMIT = 20;
+
     public function __construct(private SshRepository $sshRepository) {}
 
     public function sync(Project $project): bool
     {
         try {
-            $tags = $project->ssh_url
-                ? $this->sshTags($project)
-                : $this->giteaTags($project);
+            $tags = iterator_to_array($this->repositoryReferences($project, 'tags'), false);
         } catch (ConnectionException|RequestException|RuntimeException $exception) {
             Log::warning('No se pudieron sincronizar los tags del proyecto.', [
                 'project_id' => $project->id,
@@ -47,30 +47,74 @@ class ProjectTagSyncService
     }
 
     /**
-     * @return list<array{name: string, commit: string}>
+     * @return array{branches: list<string>, tags: list<string>}
      */
-    private function sshTags(Project $project): array
+    public function references(Project $project): array
     {
-        return $this->sshRepository->listTags(
-            $project->ssh_url,
-            $project->owner,
-            $project->repository,
-        );
+        $result = [];
+        foreach (['branches' => 'refs/heads/', 'tags' => 'refs/tags/'] as $kind => $prefix) {
+            $names = [];
+            foreach ($this->repositoryReferences($project, $kind) as $reference) {
+                if (mb_strlen($prefix.$reference['name']) <= 255) {
+                    $names[] = $reference['name'];
+                }
+            }
+            natcasesort($names);
+            $orderedNames = array_reverse(array_unique($names));
+            $result[$kind] = $kind === 'tags' ? array_slice($orderedNames, 0, self::SELECTOR_TAG_LIMIT) : $orderedNames;
+        }
+
+        return $result;
+    }
+
+    public function resolve(Project $project, string $ref): string
+    {
+        if ($project->ssh_url) {
+            if (! SshRepository::validUrl($project->ssh_url, $project->owner, $project->repository)) {
+                throw new RuntimeException('La URL SSH no corresponde al repositorio configurado.');
+            }
+
+            return $this->sshRepository->resolve($project->ssh_url, $ref);
+        }
+
+        [, $namespace, $name] = explode('/', $ref, 3);
+        foreach ($this->repositoryReferences($project, $namespace === 'tags' ? 'tags' : 'branches') as $reference) {
+            if ($reference['name'] === $name) {
+                return $reference['commit'];
+            }
+        }
+
+        throw new RuntimeException('La referencia no existe en el repositorio.');
     }
 
     /**
-     * @return list<array{name: string, commit: string}>
+     * @param  'branches'|'tags'  $kind
+     * @return iterable<array{name: string, commit: string}>
      */
-    private function giteaTags(Project $project): array
+    private function repositoryReferences(Project $project, string $kind): iterable
+    {
+        if (! $project->ssh_url) {
+            return $this->giteaReferences($project, $kind);
+        }
+
+        return $kind === 'tags'
+            ? $this->sshRepository->listTags($project->ssh_url, $project->owner, $project->repository)
+            : $this->sshRepository->listBranches($project->ssh_url, $project->owner, $project->repository);
+    }
+
+    /**
+     * @param  'branches'|'tags'  $kind
+     * @return iterable<array{name: string, commit: string}>
+     */
+    private function giteaReferences(Project $project, string $kind): iterable
     {
         if (parse_url($project->gitea_url, PHP_URL_SCHEME) !== 'https') {
-            throw new RuntimeException('La consulta de tags por API requiere HTTPS o una URL SSH.');
+            throw new RuntimeException('La consulta de referencias por API requiere HTTPS o una URL SSH.');
         }
 
         $url = $project->gitea_url.'/api/v1/repos/'
             .rawurlencode($project->owner).'/'
-            .rawurlencode($project->repository).'/tags';
-        $tags = [];
+            .rawurlencode($project->repository).'/'.$kind;
 
         for ($page = 1; $page <= self::MAX_PAGES + 1; $page++) {
             $request = Http::connectTimeout(3)
@@ -83,38 +127,40 @@ class ProjectTagSyncService
             }
 
             $response = $request->get($url, ['limit' => self::PAGE_SIZE, 'page' => $page])->throw();
-            $pageTags = json_decode($response->body());
+            $references = json_decode($response->body());
 
-            if (! is_array($pageTags)) {
-                throw new RuntimeException('Gitea devolvió una lista de tags inválida.');
+            if (! $response->successful() || ! is_array($references)) {
+                throw new RuntimeException('Gitea devolvió una lista de referencias inválida.');
             }
 
-            foreach ($pageTags as $tag) {
-                if (! is_object($tag)) {
-                    throw new RuntimeException('Gitea devolvió un tag inválido.');
+            foreach ($references as $reference) {
+                if (! is_object($reference)) {
+                    throw new RuntimeException('Gitea devolvió una referencia inválida.');
                 }
 
-                $name = $tag->name ?? null;
-                $commitData = $tag->commit ?? null;
-                $commit = is_object($commitData) ? ($commitData->sha ?? null) : null;
+                $name = $reference->name ?? null;
+                $commitData = $reference->commit ?? null;
+                $commit = is_object($commitData)
+                    ? ($kind === 'tags' ? ($commitData->sha ?? null) : ($commitData->id ?? null))
+                    : null;
 
-                if (! is_string($name) || ! is_string($commit) || ! preg_match('/\A[a-f0-9]{40}\z/iD', $commit)) {
-                    throw new RuntimeException('Gitea devolvió un tag sin un commit válido.');
+                if (! is_string($name) || $name === '' || ! is_string($commit) || ! preg_match('/\A[a-f0-9]{40}\z/iD', $commit)) {
+                    throw new RuntimeException('Gitea devolvió una referencia sin un commit válido.');
                 }
 
-                $tags[] = ['name' => $name, 'commit' => strtolower($commit)];
+                yield ['name' => $name, 'commit' => strtolower($commit)];
             }
 
-            if (count($pageTags) < self::PAGE_SIZE) {
-                return $tags;
+            if (count($references) < self::PAGE_SIZE) {
+                return;
             }
 
             if ($page > self::MAX_PAGES) {
-                throw new RuntimeException('El repositorio contiene demasiados tags para una sincronización segura.');
+                throw new RuntimeException('El repositorio contiene demasiadas referencias para una sincronización segura.');
             }
         }
 
-        throw new RuntimeException('No se pudo completar la consulta paginada de tags.');
+        throw new RuntimeException('No se pudo completar la consulta paginada de referencias.');
     }
 
     /**
