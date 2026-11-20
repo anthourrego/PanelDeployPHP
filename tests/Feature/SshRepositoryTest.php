@@ -38,6 +38,8 @@ class SshRepositoryTest extends TestCase
         $this->git(['add', 'app.txt']);
         $this->git(['commit', '-qm', 'initial']);
         $this->git(['tag', '-a', 'v1', '-m', 'release']);
+        $this->git(['tag', 'v1.9.9']);
+        $this->git(['tag', '-a', 'v1.10.0', '-m', 'release']);
         $this->originalPath = getenv('PATH');
         $path = base_path('tests/Fixtures').PATH_SEPARATOR.$this->originalPath;
         putenv('PATH='.$path);
@@ -106,6 +108,11 @@ class SshRepositoryTest extends TestCase
         ])->assertSessionHasNoErrors();
         $this->assertDatabaseHas('deployments', ['repository_url' => 'git@gitea.test:team/app.git', 'commit' => $this->git(['rev-parse', 'HEAD'])]);
         $this->post('/projects/'.$project->id.'/ssh', ['ssh_url' => 'git@other.test:team/app.git'])->assertSessionHasNoErrors();
+        $this->assertDatabaseHas('projects', [
+            'id' => $project->id,
+            'latest_tag' => 'v1.10.0',
+            'latest_tag_commit' => $this->git(['rev-parse', 'HEAD']),
+        ]);
         $server->agent_token_hash = hash('sha256', str_repeat('a', 64));
         $server->save();
         $project->deployments()->firstOrFail()->update(['scheduled_at' => now()->subMinute()]);

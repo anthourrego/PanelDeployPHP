@@ -328,6 +328,16 @@ function ServersList({ servers, showActions = false }) {
 }
 
 function ProjectsGrid({ onAssign, onSsh, projects }) {
+    const [syncingProjectIds, setSyncingProjectIds] = useState([]);
+
+    function syncTags(projectId) {
+        setSyncingProjectIds((current) => [...current, projectId]);
+        router.post(`/projects/${projectId}/tags/sync`, {}, {
+            preserveScroll: true,
+            onFinish: () => setSyncingProjectIds((current) => current.filter((id) => id !== projectId)),
+        });
+    }
+
     if (projects.length === 0) {
         return <div className="rounded-2xl bg-white dark:bg-slate-900 shadow-sm ring-1 ring-slate-200 dark:ring-slate-700"><EmptyState>No hay proyectos registrados.</EmptyState></div>;
     }
@@ -373,6 +383,54 @@ function ProjectsGrid({ onAssign, onSsh, projects }) {
                             </ul>
                         ) : <p className="text-sm text-slate-500 dark:text-slate-400">Sin servidores asignados.</p>}
                     </div>
+                    <div className="mt-4 rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Última versión disponible</p>
+                                {project.latest_tag ? (
+                                    <p className="mt-1 break-all text-sm font-semibold text-slate-700 dark:text-slate-200">
+                                        {project.latest_tag}{project.latest_tag_commit && <> · <code className="text-xs">{project.latest_tag_commit.slice(0, 8)}</code></>}
+                                    </p>
+                                ) : (
+                                    <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
+                                        {project.latest_tag_synced_at ? 'No se encontraron tags SemVer.' : 'Aún no sincronizada.'}
+                                    </p>
+                                )}
+                                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                    Última consulta: {project.latest_tag_synced_at ? `${project.latest_tag_synced_at} UTC` : 'nunca'}
+                                </p>
+                            </div>
+                            <button
+                                aria-label={`Sincronizar tags de ${project.name}`}
+                                className={secondaryButton}
+                                disabled={syncingProjectIds.includes(project.id)}
+                                onClick={() => syncTags(project.id)}
+                                type="button"
+                            >
+                                {syncingProjectIds.includes(project.id) ? 'Sincronizando…' : 'Sincronizar tags'}
+                            </button>
+                        </div>
+                        {project.latest_tag_sync_error && <p className="mt-2 text-xs text-red-700 dark:text-red-300">{project.latest_tag_sync_error}</p>}
+                    </div>
+                    {project.latest_deployment && (
+                        <div className="mt-4 rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
+                            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Último lanzamiento</p>
+                            <p className="mt-1 break-all text-sm font-semibold text-slate-700 dark:text-slate-200">
+                                {project.latest_deployment.ref} · <code className="text-xs">{project.latest_deployment.commit.slice(0, 8)}</code>
+                            </p>
+                            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                Creado: {project.latest_deployment.created_at} UTC · Programado: {project.latest_deployment.scheduled_at} UTC
+                            </p>
+                            <ul className="mt-2 space-y-1">
+                                {project.latest_deployment.targets.map((target) => (
+                                    <li className="flex items-center justify-between gap-2 text-xs" key={target.server_name}>
+                                        <span className="truncate text-slate-600 dark:text-slate-300">{target.server_name}</span>
+                                        <StatusBadge status={target.status} />
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
                     <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 dark:border-slate-800 pt-4">
                         <button className={secondaryButton} onClick={() => onAssign(project.id)} type="button"><Icon className="size-4" name="plus" />Asignar ruta</button>
                         <button className={secondaryButton} onClick={() => onSsh(project)} type="button"><Icon className="size-4" name="link" />Conexión SSH</button>
@@ -432,6 +490,10 @@ export default function Panel({ deployments, projects, section, sectionUrls, ser
             const message = event.detail.page.props.flash?.success;
             if (message) {
                 notifySuccess(message);
+            }
+            const errorMessage = event.detail.page.props.flash?.error;
+            if (errorMessage) {
+                notifyError(errorMessage);
             }
         });
         const removeError = router.on('error', (event) => {

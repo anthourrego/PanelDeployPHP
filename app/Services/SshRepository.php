@@ -84,9 +84,65 @@ class SshRepository
         }
     }
 
-    private function git(array $arguments, string $path): string
+    /**
+     * @return list<array{name: string, commit: string}>
+     */
+    public function listTags(string $url, string $owner, string $repository): array
     {
-        $result = Process::path($path)->timeout(120)->env([
+        if (! self::validUrl($url, $owner, $repository)) {
+            throw new RuntimeException('La URL SSH no corresponde al repositorio configurado.');
+        }
+
+        $scratch = storage_path('app/private/git-'.Str::uuid());
+        if (! File::makeDirectory($scratch, 0700, true)) {
+            throw new RuntimeException('No se pudo crear el directorio temporal de Git.');
+        }
+
+        try {
+            $this->git(['init', '--bare', '--quiet', $scratch], $scratch);
+            $advertisement = $this->git(['ls-remote', '--tags', '--', $url], $scratch, 15);
+            $tagObjects = [];
+            $peeledTags = [];
+
+            foreach (preg_split('/\R/', trim($advertisement)) as $line) {
+                if ($line === '') {
+                    continue;
+                }
+
+                if (! preg_match('/\A([a-f0-9]{40})\trefs\/tags\/(.+)\z/iD', $line, $match)) {
+                    throw new RuntimeException('Git devolvió una lista de tags inválida.');
+                }
+
+                $reference = $match[2];
+                $tagName = str_ends_with($reference, '^{}')
+                    ? substr($reference, 0, -3)
+                    : $reference;
+                $sha = strtolower($match[1]);
+
+                if (str_ends_with($reference, '^{}')) {
+                    $peeledTags[$tagName] = $sha;
+                } else {
+                    $tagObjects[$tagName] = $sha;
+                }
+            }
+
+            $tags = [];
+            foreach ($tagObjects as $tagName => $sha) {
+                $tags[] = [
+                    'name' => $tagName,
+                    'commit' => $peeledTags[$tagName] ?? $sha,
+                ];
+            }
+
+            return $tags;
+        } finally {
+            File::deleteDirectory($scratch);
+        }
+    }
+
+    private function git(array $arguments, string $path, int $timeout = 120): string
+    {
+        $result = Process::path($path)->timeout($timeout)->env([
             'GIT_TERMINAL_PROMPT' => '0',
             'GIT_SSH_COMMAND' => 'ssh -o BatchMode=yes -o StrictHostKeyChecking=yes',
             'GIT_SSH_VARIANT' => 'ssh',

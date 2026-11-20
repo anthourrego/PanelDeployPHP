@@ -6,10 +6,12 @@ use App\Models\Deployment;
 use App\Models\DeploymentTarget;
 use App\Models\Project;
 use App\Models\Server;
+use App\Services\ProjectTagSyncService;
 use App\Services\SshRepository;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Client\ConnectionException;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
@@ -32,7 +34,7 @@ class PanelController extends Controller
                 'projects' => route('panel.projects', absolute: false),
                 'servers' => route('panel.servers', absolute: false),
             ],
-            'projects' => Project::with('servers')->orderBy('name')->get()->map(fn (Project $project): array => [
+            'projects' => Project::with(['servers', 'latestDeployment.targets.server'])->orderBy('name')->get()->map(fn (Project $project): array => [
                 'id' => $project->id,
                 'name' => $project->name,
                 'owner' => $project->owner,
@@ -45,6 +47,20 @@ class PanelController extends Controller
                 'ssh_url' => $project->ssh_url,
                 'is_active' => $project->is_active,
                 'has_deployments' => $project->deployments()->exists(),
+                'latest_tag' => $project->latest_tag,
+                'latest_tag_commit' => $project->latest_tag_commit,
+                'latest_tag_synced_at' => $project->latest_tag_synced_at?->format('Y-m-d H:i'),
+                'latest_tag_sync_error' => $project->latest_tag_sync_error,
+                'latest_deployment' => $project->latestDeployment === null ? null : [
+                    'ref' => $project->latestDeployment->ref,
+                    'commit' => $project->latestDeployment->commit,
+                    'created_at' => $project->latestDeployment->created_at->format('Y-m-d H:i'),
+                    'scheduled_at' => $project->latestDeployment->scheduled_at->format('Y-m-d H:i'),
+                    'targets' => $project->latestDeployment->targets->map(fn (DeploymentTarget $target): array => [
+                        'server_name' => $target->server->name,
+                        'status' => $target->status,
+                    ])->values(),
+                ],
             ]),
             'servers' => Server::orderBy('name')->get()->map(fn (Server $server): array => [
                 'id' => $server->id,
@@ -72,7 +88,7 @@ class PanelController extends Controller
         ]);
     }
 
-    public function project(Request $request)
+    public function project(Request $request, ProjectTagSyncService $tagSync): RedirectResponse
     {
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
@@ -101,21 +117,60 @@ class PanelController extends Controller
         }
         $data['preserved_paths'] = $paths;
         $data['gitea_url'] = rtrim($data['gitea_url'], '/');
-        Project::create($data);
+        $project = Project::create($data);
+        $synced = $tagSync->sync($project);
 
-        return back()->with('success', 'Proyecto registrado.');
+        return $this->tagSyncResponse(
+            $project,
+            $synced,
+            'Proyecto registrado.',
+            'Proyecto registrado, pero no fue posible sincronizar sus tags. Revise el estado del proyecto.',
+        );
     }
 
-    public function sshRepository(Request $request, Project $project)
+    public function sshRepository(Request $request, Project $project, ProjectTagSyncService $tagSync): RedirectResponse
     {
         $data = $request->validate(['ssh_url' => ['nullable', 'string', 'max:255']]);
         $url = $data['ssh_url'] ?? null;
         if ($url !== null && ! SshRepository::validUrl($url, $project->owner, $project->repository)) {
             throw ValidationException::withMessages(['ssh_url' => 'Use la URL SSH del mismo propietario y repositorio, sin contraseñas ni parámetros.']);
         }
-        $project->update(['ssh_url' => $url]);
+        if ($project->ssh_url === $url) {
+            return back()->with('success', 'Conexión SSH sin cambios; use Sincronizar tags para consultar de nuevo.');
+        }
 
-        return back()->with('success', 'Conexión SSH actualizada para nuevas programaciones; las existentes conservan su URL original.');
+        $project->update(['ssh_url' => $url]);
+        $synced = $tagSync->sync($project);
+
+        return $this->tagSyncResponse(
+            $project,
+            $synced,
+            'Conexión SSH actualizada para nuevas programaciones.',
+            'Conexión SSH actualizada, pero no fue posible sincronizar sus tags. Revise el estado del proyecto.',
+        );
+    }
+
+    public function syncProjectTags(Project $project, ProjectTagSyncService $tagSync): RedirectResponse
+    {
+        return $this->tagSyncResponse(
+            $project,
+            $tagSync->sync($project),
+            'Sincronización de tags completada.',
+            'No fue posible sincronizar los tags. Revise el estado del proyecto.',
+        );
+    }
+
+    private function tagSyncResponse(Project $project, bool $synced, string $successMessage, string $errorMessage): RedirectResponse
+    {
+        if (! $synced) {
+            return back()->with('error', $errorMessage);
+        }
+
+        if ($project->latest_tag === null) {
+            return back()->with('success', $successMessage.' No se encontraron tags SemVer.');
+        }
+
+        return back()->with('success', $successMessage.' Última versión disponible: '.$project->latest_tag.'.');
     }
 
     public function server(Request $request)
@@ -208,6 +263,16 @@ class PanelController extends Controller
                     'repository_url' => $repositoryUrl,
                     'scheduled_at' => $scheduledAt->utc(),
                 ]);
+                Project::query()
+                    ->whereKey($project->id)
+                    ->where(function ($query) use ($deployment) {
+                        $query->whereNull('latest_deployment_id')
+                            ->orWhere('latest_deployment_id', '<', $deployment->id);
+                    })
+                    ->update([
+                        'latest_deployment_id' => $deployment->id,
+                        'updated_at' => now(),
+                    ]);
                 foreach ($servers as $server) {
                     $target = $deployment->targets()->create([
                         'server_id' => $server->id,
@@ -256,8 +321,24 @@ class PanelController extends Controller
                 throw ValidationException::withMessages(['deployment' => 'Solo se pueden eliminar programaciones canceladas; las demás forman parte del historial.']);
             }
             DB::table('deployment_reservations')->whereIn('deployment_target_id', $targets->modelKeys())->delete();
+            $projectId = $deployment->project_id;
             $deployment->targets()->delete();
             $deployment->delete();
+
+            $latestDeploymentId = Deployment::query()
+                ->where('project_id', $projectId)
+                ->max('id');
+
+            Project::query()
+                ->whereKey($projectId)
+                ->where(function ($query) use ($deployment) {
+                    $query->where('latest_deployment_id', $deployment->id)
+                        ->orWhereNull('latest_deployment_id');
+                })
+                ->update([
+                    'latest_deployment_id' => $latestDeploymentId,
+                    'updated_at' => now(),
+                ]);
         }, 3);
 
         return back()->with('success', 'Programación eliminada.');

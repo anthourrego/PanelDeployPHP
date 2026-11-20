@@ -27,6 +27,7 @@ Route::middleware('auth')->group(function () {
     Route::get('/servidores', [PanelController::class, 'index'])->defaults('section', 'servers')->name('panel.servers');
     Route::post('/projects', [PanelController::class, 'project'])->name('projects.store');
     Route::post('/projects/{project}/ssh', [PanelController::class, 'sshRepository'])->name('projects.ssh');
+    Route::post('/projects/{project}/tags/sync', [PanelController::class, 'syncProjectTags'])->middleware('throttle:5,1')->name('projects.tags.sync');
     Route::post('/servers', [PanelController::class, 'server'])->name('servers.store');
     Route::post('/assignments', [PanelController::class, 'assignment'])->name('assignments.store');
     Route::post('/deployments', [PanelController::class, 'deployment'])->name('deployments.store');

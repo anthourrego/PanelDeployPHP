@@ -8,6 +8,7 @@ use App\Models\Project;
 use App\Models\Server;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Support\Facades\Http;
 use Inertia\Testing\AssertableInertia as Assert;
 use Tests\TestCase;
@@ -71,12 +72,13 @@ class PanelTest extends TestCase
 
     public function test_panel_shares_success_flash_messages(): void
     {
-        $this->withSession(['success' => 'Proyecto registrado.'])
+        $this->withSession(['success' => 'Proyecto registrado.', 'error' => 'No se pudieron sincronizar los tags.'])
             ->actingAs(User::factory()->create())
             ->get('/')
             ->assertInertia(fn (Assert $page) => $page
                 ->component('Panel')
-                ->where('flash.success', 'Proyecto registrado.'));
+                ->where('flash.success', 'Proyecto registrado.')
+                ->where('flash.error', 'No se pudieron sincronizar los tags.'));
     }
 
     public function test_panel_exposes_only_safe_project_properties(): void
@@ -109,6 +111,7 @@ class PanelTest extends TestCase
 
     public function test_project_secrets_require_https_and_paths_must_be_relative(): void
     {
+        Http::preventStrayRequests();
         $user = User::factory()->create();
         $data = ['name' => 'Proyecto', 'gitea_url' => 'http://gitea.test', 'owner' => 'team', 'repository' => 'app', 'gitea_token' => 'secret'];
         $this->actingAs($user)->post('/projects', $data)->assertSessionHasErrors('gitea_token');
@@ -118,6 +121,144 @@ class PanelTest extends TestCase
         $data['preserved_paths'] = "uploads\napplication/config/database.php";
         $this->actingAs($user)->post('/projects', $data)->assertSessionHasNoErrors();
         $this->assertSame(['uploads', 'application/config/database.php'], Project::firstOrFail()->preserved_paths);
+    }
+
+    public function test_project_creation_syncs_the_highest_semver_tag_across_gitea_pages(): void
+    {
+        $firstPage = [
+            ['name' => 'v1.9.9', 'commit' => ['sha' => str_repeat('a', 40)]],
+            ['name' => 'v2.0.0-rc.2', 'commit' => ['sha' => str_repeat('b', 40)]],
+            ['name' => 'v2.0.0-rc.10', 'commit' => ['sha' => str_repeat('c', 40)]],
+        ];
+        foreach (range(1, 47) as $patch) {
+            $firstPage[] = ['name' => 'v1.0.'.$patch, 'commit' => ['sha' => str_repeat('d', 40)]];
+        }
+        $secondPage = [['name' => 'v2.0.0', 'commit' => ['sha' => str_repeat('e', 40)]]];
+
+        Http::preventStrayRequests();
+        Http::fake(function (ClientRequest $request) use ($firstPage, $secondPage) {
+            return str_contains($request->url(), 'page=1')
+                ? Http::response($firstPage)
+                : Http::response($secondPage);
+        });
+
+        $this->actingAs(User::factory()->create())->post('/projects', [
+            'name' => 'Proyecto',
+            'gitea_url' => 'https://gitea.test',
+            'owner' => 'team',
+            'repository' => 'app',
+            'gitea_token' => 'secret-token',
+        ])->assertSessionHasNoErrors()
+            ->assertSessionHas('success', 'Proyecto registrado. Última versión disponible: v2.0.0.');
+
+        $project = Project::firstOrFail();
+        $this->assertDatabaseHas('projects', [
+            'id' => $project->id,
+            'latest_tag' => 'v2.0.0',
+            'latest_tag_commit' => str_repeat('e', 40),
+            'latest_tag_sync_error' => null,
+        ]);
+        $this->assertNotNull($project->latest_tag_synced_at);
+        Http::assertSent(fn (ClientRequest $request) => str_contains($request->url(), 'page=2')
+            && $request->hasHeader('Authorization', 'token secret-token'));
+    }
+
+    public function test_manual_tag_sync_updates_the_project_version(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://gitea.test/api/v1/repos/team/app/tags*' => Http::response([
+                ['name' => 'v3.0.0-rc.2', 'commit' => ['sha' => str_repeat('e', 40)]],
+                ['name' => 'v3.0.0-rc.10', 'commit' => ['sha' => str_repeat('f', 40)]],
+            ]),
+        ]);
+        $project = $this->makeProject();
+
+        $this->actingAs(User::factory()->create())
+            ->post("/projects/{$project->id}/tags/sync")
+            ->assertSessionHas('success', 'Sincronización de tags completada. Última versión disponible: v3.0.0-rc.10.');
+
+        $this->assertDatabaseHas('projects', [
+            'id' => $project->id,
+            'latest_tag' => 'v3.0.0-rc.10',
+            'latest_tag_commit' => str_repeat('f', 40),
+            'latest_tag_sync_error' => null,
+        ]);
+    }
+
+    public function test_sync_with_no_semver_tags_clears_the_previous_version(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://gitea.test/api/v1/repos/team/app/tags*' => Http::response([
+                ['name' => 'release-v1', 'commit' => ['sha' => str_repeat('e', 40)]],
+            ]),
+        ]);
+        $project = $this->makeProject();
+        $project->forceFill([
+            'latest_tag' => 'v1.0.0',
+            'latest_tag_commit' => str_repeat('a', 40),
+        ])->save();
+
+        $this->actingAs(User::factory()->create())
+            ->post("/projects/{$project->id}/tags/sync")
+            ->assertSessionHas('success', 'Sincronización de tags completada. No se encontraron tags SemVer.');
+
+        $this->assertDatabaseHas('projects', [
+            'id' => $project->id,
+            'latest_tag' => null,
+            'latest_tag_commit' => null,
+            'latest_tag_sync_error' => null,
+        ]);
+        $this->assertNotNull($project->fresh()->latest_tag_synced_at);
+    }
+
+    public function test_failed_tag_sync_preserves_the_last_known_version_and_reports_the_error(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://gitea.test/api/v1/repos/team/app/tags*' => Http::response([], 503),
+        ]);
+        $project = $this->makeProject();
+        $project->forceFill([
+            'latest_tag' => 'v2.4.0',
+            'latest_tag_commit' => str_repeat('a', 40),
+        ])->save();
+
+        $this->actingAs(User::factory()->create())
+            ->post("/projects/{$project->id}/tags/sync")
+            ->assertSessionHas('error', 'No fue posible sincronizar los tags. Revise el estado del proyecto.');
+
+        $this->assertDatabaseHas('projects', [
+            'id' => $project->id,
+            'latest_tag' => 'v2.4.0',
+            'latest_tag_commit' => str_repeat('a', 40),
+            'latest_tag_sync_error' => 'No fue posible consultar los tags. Verifique la conexión, las credenciales y la URL del repositorio.',
+        ]);
+    }
+
+    public function test_invalid_tag_response_preserves_the_last_known_version(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://gitea.test/api/v1/repos/team/app/tags*' => Http::response('{}', 200, ['Content-Type' => 'application/json']),
+        ]);
+        $project = $this->makeProject();
+        $project->forceFill([
+            'latest_tag' => 'v2.4.0',
+            'latest_tag_commit' => str_repeat('a', 40),
+        ])->save();
+
+        $this->actingAs(User::factory()->create())
+            ->post("/projects/{$project->id}/tags/sync")
+            ->assertSessionHas('error', 'No fue posible sincronizar los tags. Revise el estado del proyecto.');
+
+        $this->assertDatabaseHas('projects', [
+            'id' => $project->id,
+            'latest_tag' => 'v2.4.0',
+            'latest_tag_commit' => str_repeat('a', 40),
+            'latest_tag_sync_error' => 'No fue posible consultar los tags. Verifique la conexión, las credenciales y la URL del repositorio.',
+        ]);
     }
 
     public function test_programming_pins_commit_and_snapshots_each_target(): void
@@ -131,6 +272,11 @@ class PanelTest extends TestCase
             'project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'main',
             'scheduled_at' => now('America/Bogota')->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'America/Bogota',
         ])->assertSessionHasNoErrors();
+        $deployment = Deployment::firstOrFail();
+        $this->assertDatabaseHas('projects', [
+            'id' => $project->id,
+            'latest_deployment_id' => $deployment->id,
+        ]);
         $this->assertDatabaseHas('deployments', ['commit' => str_repeat('a', 40), 'ref' => 'main']);
         $this->assertDatabaseHas('deployment_targets', ['server_id' => $server->id, 'status' => 'pending', 'path' => 'C:\\wamp64\\www\\app']);
         $this->assertSame(['uploads'], DeploymentTarget::firstOrFail()->preserved_paths);
@@ -139,6 +285,24 @@ class PanelTest extends TestCase
             'scheduled_at' => now('America/Bogota')->addDays(2)->format('Y-m-d\TH:i'), 'timezone' => 'America/Bogota',
         ])->assertSessionHasErrors('servers');
         $this->assertDatabaseCount('deployments', 1);
+    }
+
+    public function test_project_shows_its_latest_deployment_and_target_statuses(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->makeProject();
+        $server = Server::create(['name' => 'Servidor']);
+        $this->scheduledDeployment($user, $project, $server);
+        DeploymentTarget::firstOrFail()->forceFill(['status' => 'succeeded'])->save();
+
+        $this->actingAs($user)->get('/proyectos')->assertInertia(fn (Assert $page) => $page
+            ->component('Panel')
+            ->has('projects', 1, fn (Assert $projectPage) => $projectPage
+                ->where('latest_deployment.ref', 'main')
+                ->where('latest_deployment.commit', str_repeat('b', 40))
+                ->where('latest_deployment.targets.0.server_name', 'Servidor')
+                ->where('latest_deployment.targets.0.status', 'succeeded')
+                ->etc()));
     }
 
     public function test_unknown_ref_or_unassigned_server_does_not_create_deployment(): void
@@ -221,6 +385,30 @@ class PanelTest extends TestCase
         $this->delete("/deployments/{$deployment->id}")->assertSessionHasNoErrors();
         $this->assertDatabaseCount('deployments', 0);
         $this->assertDatabaseCount('deployment_targets', 0);
+    }
+
+    public function test_deleting_the_latest_cancelled_deployment_restores_the_previous_latest_deployment(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->makeProject();
+        $server = Server::create(['name' => 'Servidor']);
+        $this->scheduledDeployment($user, $project, $server);
+        $previousDeployment = Deployment::firstOrFail();
+        $this->post("/deployments/{$previousDeployment->id}/cancel")->assertSessionHasNoErrors();
+
+        $this->scheduledDeployment($user, $project, $server);
+        $latestDeployment = Deployment::query()->latest('id')->firstOrFail();
+        $this->assertDatabaseHas('projects', [
+            'id' => $project->id,
+            'latest_deployment_id' => $latestDeployment->id,
+        ]);
+        $this->post("/deployments/{$latestDeployment->id}/cancel")->assertSessionHasNoErrors();
+        $this->delete("/deployments/{$latestDeployment->id}")->assertSessionHasNoErrors();
+
+        $this->assertDatabaseHas('projects', [
+            'id' => $project->id,
+            'latest_deployment_id' => $previousDeployment->id,
+        ]);
     }
 
     public function test_assignment_in_use_cannot_be_removed(): void
