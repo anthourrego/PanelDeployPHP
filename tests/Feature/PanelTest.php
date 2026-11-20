@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Http\Middleware\EnsureActiveUser;
 use App\Models\Deployment;
 use App\Models\DeploymentTarget;
 use App\Models\Project;
@@ -9,6 +10,8 @@ use App\Models\Server;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as ClientRequest;
+use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Testing\AssertableInertia as Assert;
@@ -47,15 +50,138 @@ class PanelTest extends TestCase
         }
     }
 
-    public function test_panel_exposes_only_the_authenticated_users_name_and_email(): void
+    public function test_panel_exposes_only_the_authenticated_users_profile_fields(): void
     {
-        $user = User::factory()->create(['name' => 'Usuario de prueba', 'email' => 'usuario@example.test']);
+        $user = User::factory()->create([
+            'name' => 'Usuario de prueba',
+            'username' => 'usuario.prueba',
+            'email' => 'usuario@example.test',
+        ]);
 
         $this->actingAs($user)->get('/')->assertInertia(fn (Assert $page) => $page
             ->component('Panel')
+            ->where('profileUpdateUrl', '/perfil')
+            ->where('passwordUpdateUrl', '/perfil/contrasena')
             ->has('user', fn (Assert $userPage) => $userPage
                 ->where('name', 'Usuario de prueba')
+                ->where('username', 'usuario.prueba')
                 ->where('email', 'usuario@example.test')));
+    }
+
+    public function test_authenticated_user_can_update_only_their_own_profile(): void
+    {
+        $user = User::factory()->create();
+        $other = User::factory()->admin()->create();
+
+        $this->actingAs($user)->from('/proyectos')->patch(route('profile.update'), [
+            'id' => $other->id,
+            'name' => 'Perfil actualizado',
+            'username' => 'Nuevo.Usuario',
+            'email' => 'nuevo@example.test',
+            'is_admin' => true,
+            'is_active' => false,
+            'password' => 'ignored-test-password',
+        ])->assertRedirect('/proyectos')
+            ->assertSessionHas('success', 'Perfil actualizado.');
+
+        $this->assertDatabaseHas('users', [
+            'id' => $user->id,
+            'name' => 'Perfil actualizado',
+            'username' => 'nuevo.usuario',
+            'email' => 'nuevo@example.test',
+            'is_admin' => false,
+            'is_active' => true,
+            'password' => $user->getRawOriginal('password'),
+        ]);
+        $this->assertDatabaseHas('users', ['id' => $other->id, 'email' => $other->email]);
+    }
+
+    public function test_profile_rejects_spaces_in_username_and_duplicate_email(): void
+    {
+        $user = User::factory()->create();
+        $other = User::factory()->create();
+
+        $this->actingAs($user)->patch(route('profile.update'), [
+            'name' => $user->name,
+            'username' => 'con espacios',
+            'email' => $other->email,
+        ])->assertInvalid(['username', 'email']);
+
+        $this->assertDatabaseHas('users', ['id' => $user->id, 'email' => $user->email]);
+    }
+
+    public function test_profile_update_requires_authentication(): void
+    {
+        $this->patch(route('profile.update'))->assertRedirectToRoute('login');
+    }
+
+    public function test_user_can_change_their_password_and_only_the_current_session_stays_active(): void
+    {
+        $user = User::factory()->create(['username' => 'usuario']);
+        $other = User::factory()->create();
+        $newPassword = 'a-new-test-password';
+        $previousVersion = $user->session_version;
+        $sessionKey = EnsureActiveUser::SESSION_VERSION_KEY;
+
+        $this->actingAs($user)->withSession([$sessionKey => $previousVersion])
+            ->from('/proyectos')->patch(route('profile.password.update'), [
+                'id' => $other->id,
+                'is_admin' => true,
+                'current_password' => 'password',
+                'password' => $newPassword,
+                'password_confirmation' => $newPassword,
+            ])->assertRedirect('/proyectos')
+            ->assertSessionHas('success', 'Contraseña actualizada.')
+            ->assertSessionHas($sessionKey, $previousVersion + 1);
+
+        $changed = $user->fresh();
+        $this->assertTrue(Hash::check($newPassword, $changed->password));
+        $this->assertFalse($changed->is_admin);
+        $this->assertNull($changed->remember_token);
+        $this->assertSame($other->password, $other->fresh()->password);
+        $this->actingAs($changed)->get('/')->assertOk();
+        $this->withSession([$sessionKey => $previousVersion])->get('/')->assertRedirectToRoute('login');
+        $this->assertGuest();
+
+        $this->post('/login', ['username' => $user->username, 'password' => 'password'])
+            ->assertInvalid(['username']);
+        $this->post('/login', ['username' => $user->username, 'password' => $newPassword])
+            ->assertRedirect('/');
+        $this->get('/')->assertOk();
+    }
+
+    public function test_password_change_rejects_invalid_credentials_and_confirmation(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user);
+
+        $this->patch(route('profile.password.update'), [
+            'current_password' => 'wrong-password',
+            'password' => 'a-new-test-password',
+            'password_confirmation' => 'a-new-test-password',
+        ])->assertInvalid(['current_password' => 'La contraseña actual no es correcta.'])
+            ->assertSessionMissing('_old_input.current_password')
+            ->assertSessionMissing('_old_input.password')
+            ->assertSessionMissing('_old_input.password_confirmation');
+
+        $this->patch(route('profile.password.update'), [
+            'current_password' => 'password',
+            'password' => 'a-new-test-password',
+            'password_confirmation' => 'a-different-password',
+        ])->assertInvalid(['password' => 'La confirmación no coincide con la nueva contraseña.']);
+
+        $this->patch(route('profile.password.update'), [
+            'current_password' => 'password',
+            'password' => 'eleven-char',
+            'password_confirmation' => 'eleven-char',
+        ])->assertInvalid(['password']);
+
+        $this->assertSame($user->password, $user->fresh()->password);
+    }
+
+    public function test_password_change_requires_authentication(): void
+    {
+        $this->patch(route('profile.password.update'))->assertRedirectToRoute('login');
     }
 
     public function test_direct_section_links_require_authentication(): void
@@ -137,6 +263,232 @@ class PanelTest extends TestCase
         $this->get('/login')->assertInertia(fn (Assert $page) => $page
             ->component('Auth/Login')
             ->has('errors'));
+    }
+
+    public function test_user_can_log_in_with_username(): void
+    {
+        $user = User::factory()->create(['username' => 'deploy.operator']);
+
+        $this->post('/login', ['username' => 'Deploy.Operator', 'password' => 'password'])
+            ->assertRedirect('/');
+
+        $this->assertAuthenticatedAs($user);
+    }
+
+    public function test_email_cannot_be_used_as_login_username(): void
+    {
+        $user = User::factory()->create([
+            'username' => 'deploy.operator',
+            'email' => 'operator@example.test',
+        ]);
+
+        $this->post('/login', ['username' => $user->email, 'password' => 'password'])
+            ->assertInvalid(['username']);
+    }
+
+    public function test_create_user_command_sets_a_username(): void
+    {
+        $this->artisan('panel:create-user')
+            ->expectsQuestion('Nombre', 'Operador')
+            ->expectsQuestion('Nombre de usuario', 'Deploy.Operator')
+            ->expectsQuestion('Correo', 'operator@example.test')
+            ->expectsQuestion('Contraseña (mínimo 12 caracteres)', 'a-long-test-password')
+            ->expectsQuestion('Confirme la contraseña', 'a-long-test-password')
+            ->expectsOutput('Usuario creado como administrador.')
+            ->assertExitCode(0);
+
+        $this->assertDatabaseHas('users', [
+            'name' => 'Operador',
+            'username' => 'deploy.operator',
+            'email' => 'operator@example.test',
+            'is_admin' => true,
+        ]);
+    }
+
+    public function test_admin_can_view_the_user_management_section(): void
+    {
+        $admin = User::factory()->admin()->create(['username' => 'admin']);
+        User::factory()->create(['name' => 'Operador', 'username' => 'operator']);
+
+        $this->actingAs($admin)->get('/usuarios')->assertInertia(fn (Assert $page) => $page
+            ->component('Panel')
+            ->where('section', 'users')
+            ->where('canManageUsers', true)
+            ->has('users', 2)
+            ->where('users.0.username', 'admin')
+            ->where('users.0.is_admin', true)
+            ->missing('users.0.password'));
+    }
+
+    public function test_non_admin_cannot_view_the_user_management_section(): void
+    {
+        $this->actingAs(User::factory()->create())
+            ->get('/usuarios')
+            ->assertForbidden();
+    }
+
+    public function test_non_admin_cannot_create_users(): void
+    {
+        $this->actingAs(User::factory()->create())
+            ->post('/usuarios', [
+                'name' => 'Usuario no autorizado',
+                'username' => 'unauthorized',
+                'email' => 'unauthorized@example.test',
+                'password' => 'a-long-test-password',
+                'password_confirmation' => 'a-long-test-password',
+                'is_admin' => true,
+            ])
+            ->assertForbidden();
+
+        $this->assertDatabaseMissing('users', ['email' => 'unauthorized@example.test']);
+    }
+
+    public function test_admin_can_create_a_regular_user_from_the_panel(): void
+    {
+        $this->actingAs(User::factory()->admin()->create())
+            ->post('/usuarios', [
+                'name' => 'Nuevo operador',
+                'username' => 'New.Operator',
+                'email' => 'new.operator@example.test',
+                'password' => 'a-long-test-password',
+                'password_confirmation' => 'a-long-test-password',
+                'is_admin' => false,
+            ])
+            ->assertSessionHas('success', 'Usuario creado.');
+
+        $this->assertDatabaseHas('users', [
+            'name' => 'Nuevo operador',
+            'username' => 'new.operator',
+            'email' => 'new.operator@example.test',
+            'is_admin' => false,
+        ]);
+    }
+
+    public function test_admin_can_create_another_administrator_from_the_panel(): void
+    {
+        $this->actingAs(User::factory()->admin()->create())
+            ->post('/usuarios', [
+                'name' => 'Nuevo administrador',
+                'username' => 'new.admin',
+                'email' => 'new.admin@example.test',
+                'password' => 'a-long-test-password',
+                'password_confirmation' => 'a-long-test-password',
+                'is_admin' => true,
+            ])
+            ->assertSessionHas('success', 'Usuario creado.');
+
+        $this->assertDatabaseHas('users', ['username' => 'new.admin', 'is_admin' => true]);
+    }
+
+    public function test_user_creation_rejects_an_invalid_admin_flag(): void
+    {
+        $this->actingAs(User::factory()->admin()->create())
+            ->post('/usuarios', [
+                'name' => 'Cuenta de prueba',
+                'username' => 'invalid.role',
+                'email' => 'invalid.role@example.test',
+                'password' => 'a-long-test-password',
+                'password_confirmation' => 'a-long-test-password',
+                'is_admin' => 'invalid',
+            ])
+            ->assertInvalid(['is_admin' => 'Indique si la cuenta debe ser de administrador.']);
+
+        $this->assertDatabaseMissing('users', ['username' => 'invalid.role']);
+    }
+
+    public function test_admin_can_edit_an_account_without_changing_its_password(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $user = User::factory()->create(['email' => 'operator@example.test']);
+        $originalPassword = $user->password;
+
+        $this->actingAs($admin)->patch(route('users.update', $user), [
+            'name' => 'Operador actualizado',
+            'username' => 'Updated.Operator',
+            'email' => $user->email,
+            'is_admin' => true,
+        ])->assertRedirectToRoute('panel.users');
+
+        $this->assertDatabaseHas('users', [
+            'id' => $user->id,
+            'name' => 'Operador actualizado',
+            'username' => 'updated.operator',
+            'email' => 'operator@example.test',
+            'is_admin' => true,
+            'password' => $originalPassword,
+        ]);
+    }
+
+    public function test_user_edit_rejects_another_accounts_username_and_email(): void
+    {
+        $admin = User::factory()->admin()->create(['username' => 'panel.admin']);
+        $user = User::factory()->create();
+
+        $this->actingAs($admin)->patch(route('users.update', $user), [
+            'name' => $user->name,
+            'username' => 'PANEL.ADMIN',
+            'email' => $admin->email,
+            'is_admin' => false,
+        ])->assertInvalid(['username', 'email']);
+    }
+
+    public function test_non_admin_cannot_modify_user_details_or_access(): void
+    {
+        $operator = User::factory()->create();
+        $admin = User::factory()->admin()->create();
+
+        $this->actingAs($operator)
+            ->patch(route('users.update', $operator), ['is_admin' => true])
+            ->assertForbidden();
+        $this->patch(route('users.active', $admin), ['is_active' => false])
+            ->assertForbidden();
+    }
+
+    public function test_last_active_admin_cannot_be_demoted_or_deactivated(): void
+    {
+        $admin = User::factory()->admin()->create();
+        User::factory()->admin()->create(['is_active' => false]);
+
+        $this->actingAs($admin)->patch(route('users.update', $admin), [
+            'name' => $admin->name,
+            'username' => $admin->username,
+            'email' => $admin->email,
+            'is_admin' => false,
+        ])->assertInvalid(['is_admin' => 'Debe quedar al menos un administrador activo.']);
+        $this->patch(route('users.active', $admin), ['is_active' => false])
+            ->assertInvalid(['is_active' => 'Debe quedar al menos un administrador activo.']);
+
+        $this->assertDatabaseHas('users', ['id' => $admin->id, 'is_admin' => true, 'is_active' => true]);
+    }
+
+    public function test_deactivated_user_cannot_log_in(): void
+    {
+        $user = User::factory()->create(['is_active' => false]);
+
+        $this->post('/login', ['username' => $user->username, 'password' => 'password'])
+            ->assertInvalid(['username' => 'Credenciales incorrectas.']);
+
+        $this->assertGuest();
+    }
+
+    public function test_reactivation_allows_fresh_login_but_does_not_restore_old_sessions(): void
+    {
+        $admin = User::factory()->admin()->create();
+        $user = User::factory()->create();
+
+        $this->actingAs($admin)->patch(route('users.active', $user), ['is_active' => false])
+            ->assertSessionHas('success', 'Usuario desactivado.');
+        $this->assertDatabaseHas('users', ['id' => $user->id, 'is_active' => false]);
+        $this->patch(route('users.active', $user), ['is_active' => true])
+            ->assertSessionHas('success', 'Usuario reactivado.');
+
+        $this->actingAs($user->fresh())->get('/')
+            ->assertRedirectToRoute('login');
+        $this->assertGuest();
+
+        $this->post('/login', ['username' => $user->username, 'password' => 'password'])
+            ->assertRedirect('/');
+        $this->get('/')->assertOk();
     }
 
     public function test_panel_shares_success_flash_messages(): void
@@ -253,6 +605,61 @@ class PanelTest extends TestCase
             'latest_tag_commit' => str_repeat('f', 40),
             'latest_tag_sync_error' => null,
         ]);
+    }
+
+    public function test_bulk_tag_sync_continues_after_a_repository_failure(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake([
+            'https://gitea.test/api/v1/repos/team/broken/tags*' => Http::response([], 503),
+            'https://gitea.test/api/v1/repos/team/app/tags*' => Http::response([
+                ['name' => 'v3.0.0', 'commit' => ['sha' => str_repeat('f', 40)]],
+            ]),
+        ]);
+        $broken = $this->makeProject();
+        $broken->forceFill(['repository' => 'broken', 'latest_tag' => 'v1.0.0'])->save();
+        $project = $this->makeProject();
+        $project->update(['is_active' => false]);
+
+        $this->actingAs(User::factory()->create())
+            ->post(route('projects.tags.sync-all'))
+            ->assertRedirectToRoute('panel.projects')
+            ->assertSessionHas('error', 'Se sincronizaron 1 de 2 proyectos. No se pudieron consultar 1. Revise las tarjetas de los proyectos.');
+
+        $this->assertSame('v1.0.0', $broken->fresh()->latest_tag);
+        $this->assertNotNull($broken->fresh()->latest_tag_sync_error);
+        $this->assertSame('v3.0.0', $project->fresh()->latest_tag);
+        $this->assertDatabaseCount('deployments', 0);
+    }
+
+    public function test_bulk_tag_sync_reports_success_when_all_repositories_respond(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake(['https://gitea.test/api/v1/repos/team/*/tags*' => Http::response([])]);
+        $this->makeProject();
+        $second = $this->makeProject();
+        $second->update(['repository' => 'other']);
+
+        $this->actingAs(User::factory()->create())
+            ->post(route('projects.tags.sync-all'))
+            ->assertRedirectToRoute('panel.projects')
+            ->assertSessionHas('success', 'Se sincronizaron 2 de 2 proyectos.');
+
+        Http::assertSentCount(2);
+    }
+
+    public function test_bulk_tag_sync_requires_authentication_and_handles_an_empty_catalog(): void
+    {
+        Http::fake();
+
+        $this->post(route('projects.tags.sync-all'))->assertRedirectToRoute('login');
+
+        $this->actingAs(User::factory()->create())
+            ->post(route('projects.tags.sync-all'))
+            ->assertRedirectToRoute('panel.projects')
+            ->assertSessionHas('success', 'No hay proyectos para sincronizar.');
+
+        Http::assertNothingSent();
     }
 
     public function test_sync_with_no_semver_tags_clears_the_previous_version(): void
@@ -372,6 +779,58 @@ class PanelTest extends TestCase
                 ->where('latest_deployment.targets.0.server_name', 'Servidor')
                 ->where('latest_deployment.targets.0.status', 'succeeded')
                 ->etc()));
+    }
+
+    public function test_projects_show_each_servers_last_success_for_its_assigned_path(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->makeProject();
+        $otherProject = $this->makeProject();
+        $first = Server::create(['name' => 'Primero']);
+        $second = Server::create(['name' => 'Segundo']);
+        $third = Server::create(['name' => 'Tercero']);
+        $project->servers()->attach([$first->id, $second->id, $third->id], ['path' => 'C:\\app']);
+
+        $record = function (Project $owner, Server $server, string $ref, string $status, string $finishedAt, string $path = 'C:\\app') use ($user): void {
+            $deployment = $owner->deployments()->create([
+                'user_id' => $user->id,
+                'ref' => $ref,
+                'commit' => str_repeat('b', 40),
+                'scheduled_at' => $finishedAt,
+                'repository_url' => $owner->gitea_url,
+            ]);
+            $deployment->targets()->create([
+                'server_id' => $server->id,
+                'path' => $path,
+                'preserved_paths' => [],
+            ])->forceFill(['status' => $status, 'finished_at' => $finishedAt])->save();
+        };
+
+        $record($project, $first, 'refs/tags/v2.0.0', 'succeeded', '2026-11-20 12:00:00');
+        $record($project, $first, 'v1.0.0', 'succeeded', '2026-11-20 11:00:00');
+        $record($project, $first, 'v3.0.0', 'uncertain', '2026-11-20 13:00:00');
+        $record($project, $second, 'main', 'succeeded', '2026-11-20 12:30:00');
+        $record($project, $second, 'v4.0.0', 'failed', '2026-11-20 14:00:00');
+        $record($project, $third, 'v3.0.0', 'succeeded', '2026-11-20 13:00:00', 'C:\\old');
+        $record($otherProject, $third, 'v5.0.0', 'succeeded', '2026-11-20 15:00:00');
+
+        $this->actingAs($user)->get('/proyectos')->assertInertia(fn (Assert $page) => $page
+            ->component('Panel')
+            ->where('projects', function (Collection $projects) use ($project, $first, $second, $third): bool {
+                $servers = collect($projects->firstWhere('id', $project->id)['servers'])->keyBy('id');
+
+                $this->assertSame([
+                    'ref' => 'refs/tags/v2.0.0',
+                    'commit' => str_repeat('b', 40),
+                    'finished_at' => '2026-11-20 12:00',
+                ], $servers[$first->id]['last_successful_deployment']);
+                $this->assertTrue($servers[$first->id]['deployment_uncertain']);
+                $this->assertSame('main', $servers[$second->id]['last_successful_deployment']['ref']);
+                $this->assertFalse($servers[$second->id]['deployment_uncertain']);
+                $this->assertNull($servers[$third->id]['last_successful_deployment']);
+
+                return true;
+            }));
     }
 
     public function test_unknown_ref_or_unassigned_server_does_not_create_deployment(): void

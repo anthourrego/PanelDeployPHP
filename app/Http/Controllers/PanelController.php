@@ -2,10 +2,12 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Middleware\EnsureActiveUser;
 use App\Models\Deployment;
 use App\Models\DeploymentTarget;
 use App\Models\Project;
 use App\Models\Server;
+use App\Models\User;
 use App\Services\ProjectTagSyncService;
 use App\Services\SshRepository;
 use App\Services\WindowsAgentDownloads;
@@ -14,9 +16,14 @@ use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\Rule;
+use Illuminate\Validation\Rules\Password;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -27,16 +34,38 @@ class PanelController extends Controller
 {
     public function index(Request $request, string $section, WindowsAgentDownloads $agentDownloads): Response
     {
+        $serverVersions = $section === 'projects' ? $this->projectServerVersions() : collect();
+
         return Inertia::render('Panel', [
-            'user' => $request->user()->only(['name', 'email']),
+            'user' => $request->user()->only(['name', 'username', 'email']),
+            'profileUpdateUrl' => route('profile.update', absolute: false),
+            'passwordUpdateUrl' => route('profile.password.update', absolute: false),
+            'projectTagsSyncAllUrl' => route('projects.tags.sync-all', absolute: false),
+            'canManageUsers' => $request->user()->is_admin,
             'section' => $section,
             'agentDownloads' => $section === 'downloads' ? fn (): array => $agentDownloads->links() : null,
+            'users' => $section === 'users' ? fn (): array => User::query()
+                ->orderBy('name')
+                ->orderBy('id')
+                ->get(['id', 'name', 'username', 'email', 'is_admin', 'is_active'])
+                ->map(fn (User $user): array => [
+                    'id' => $user->id,
+                    'name' => $user->name,
+                    'username' => $user->username,
+                    'email' => $user->email,
+                    'is_admin' => $user->is_admin,
+                    'is_active' => $user->is_active,
+                    'update_url' => route('users.update', $user, absolute: false),
+                    'active_url' => route('users.active', $user, absolute: false),
+                ])
+                ->all() : [],
             'sectionUrls' => [
                 'summary' => route('panel', absolute: false),
                 'deployments' => route('panel.deployments', absolute: false),
                 'projects' => route('panel.projects', absolute: false),
                 'servers' => route('panel.servers', absolute: false),
                 'downloads' => route('panel.downloads', absolute: false),
+                'users' => route('panel.users', absolute: false),
             ],
             'projects' => Project::with(['servers', 'latestDeployment.targets.server'])->orderBy('name')->get()->map(fn (Project $project): array => [
                 'id' => $project->id,
@@ -47,6 +76,10 @@ class PanelController extends Controller
                     'id' => $server->id,
                     'name' => $server->name,
                     'path' => $server->pivot->path,
+                    ...$serverVersions->get("{$project->id}:{$server->id}", [
+                        'last_successful_deployment' => null,
+                        'deployment_uncertain' => false,
+                    ]),
                 ])->values(),
                 'ssh_url' => $project->ssh_url,
                 'is_active' => $project->is_active,
@@ -90,6 +123,186 @@ class PanelController extends Controller
                 ])->values(),
             ]),
         ]);
+    }
+
+    /**
+     * @return Collection<string, array{last_successful_deployment: array{ref: string, commit: string, finished_at: string}|null, deployment_uncertain: bool}>
+     */
+    private function projectServerVersions(): Collection
+    {
+        $finishedTargets = DB::table('deployment_targets')
+            ->join('deployments', 'deployments.id', '=', 'deployment_targets.deployment_id')
+            ->whereColumn('deployments.project_id', 'project_server.project_id')
+            ->whereColumn('deployment_targets.server_id', 'project_server.server_id')
+            ->whereColumn('deployment_targets.path', 'project_server.path')
+            ->whereNotNull('deployment_targets.finished_at')
+            ->orderByDesc('deployment_targets.finished_at')
+            ->orderByDesc('deployment_targets.id')
+            ->limit(1);
+
+        $assignments = DB::table('project_server')
+            ->select(['project_id', 'server_id'])
+            ->addSelect([
+                'success_id' => (clone $finishedTargets)->select('deployment_targets.id')->where('deployment_targets.status', 'succeeded'),
+                'latest_outcome' => (clone $finishedTargets)->select('deployment_targets.status')->whereIn('deployment_targets.status', ['succeeded', 'uncertain']),
+            ]);
+
+        return DB::query()->fromSub($assignments, 'assignments')
+            ->leftJoin('deployment_targets as successful', 'successful.id', '=', 'assignments.success_id')
+            ->leftJoin('deployments', 'deployments.id', '=', 'successful.deployment_id')
+            ->get(['assignments.project_id', 'assignments.server_id', 'assignments.latest_outcome', 'deployments.ref', 'deployments.commit', 'successful.finished_at'])
+            ->mapWithKeys(fn (object $row): array => ["{$row->project_id}:{$row->server_id}" => [
+                'last_successful_deployment' => $row->finished_at === null ? null : [
+                    'ref' => $row->ref,
+                    'commit' => $row->commit,
+                    'finished_at' => CarbonImmutable::parse($row->finished_at)->format('Y-m-d H:i'),
+                ],
+                'deployment_uncertain' => $row->latest_outcome === 'uncertain',
+            ]]);
+    }
+
+    public function createUser(Request $request): RedirectResponse
+    {
+        $data = $this->validateUser($request);
+        $user = new User(Arr::except($data, ['is_admin']));
+        $user->is_admin = (bool) ($data['is_admin'] ?? false);
+        $user->save();
+
+        return back()->with('success', 'Usuario creado.');
+    }
+
+    public function updateProfile(Request $request): RedirectResponse
+    {
+        $user = $request->user();
+        $data = $this->validateUser($request, $user, profileOnly: true);
+        $user->update(Arr::only($data, ['name', 'username', 'email']));
+
+        return back()->with('success', 'Perfil actualizado.');
+    }
+
+    public function updatePassword(Request $request): RedirectResponse
+    {
+        $data = $request->validate([
+            'current_password' => ['bail', 'required', 'string', 'current_password'],
+            'password' => ['bail', 'required', 'string', 'confirmed', Password::min(12)],
+        ], [
+            'current_password.current_password' => 'La contraseña actual no es correcta.',
+            'password.confirmed' => 'La confirmación no coincide con la nueva contraseña.',
+        ]);
+        if (str_contains($data['password'], "\0") || (config('hashing.driver') === 'bcrypt' && strlen($data['password']) > 72)) {
+            throw ValidationException::withMessages(['password' => 'La nueva contraseña contiene caracteres no admitidos o es demasiado larga.']);
+        }
+
+        $user = $request->user();
+        $nextSessionVersion = $user->session_version + 1;
+        $updated = User::whereKey($user->getKey())
+            ->where('is_active', true)
+            ->where('session_version', $user->session_version)
+            ->update([
+                'password' => Hash::make($data['password']),
+                'session_version' => $nextSessionVersion,
+                'remember_token' => null,
+            ]);
+        if ($updated !== 1) {
+            throw ValidationException::withMessages(['current_password' => 'El acceso a la cuenta cambió. Vuelve a iniciar sesión.']);
+        }
+
+        $request->session()->regenerate(true);
+        $request->session()->put(EnsureActiveUser::SESSION_VERSION_KEY, $nextSessionVersion);
+
+        return back()->with('success', 'Contraseña actualizada.');
+    }
+
+    public function updateUser(Request $request, User $user): RedirectResponse
+    {
+        $data = $this->validateUser($request, $user);
+        $isAdmin = (bool) $data['is_admin'];
+        $this->changeUserAccess($request->user(), $user, ['is_admin' => $isAdmin], Arr::except($data, ['is_admin']));
+
+        $section = $request->user()->is($user) && ! $isAdmin ? 'panel' : 'panel.users';
+
+        return redirect()->route($section)->with('success', 'Usuario actualizado.');
+    }
+
+    public function toggleUser(Request $request, User $user): RedirectResponse
+    {
+        $data = $request->validate(['is_active' => ['required', 'boolean']]);
+        $isActive = (bool) $data['is_active'];
+        $this->changeUserAccess($request->user(), $user, ['is_active' => $isActive]);
+
+        $section = $request->user()->is($user) && ! $isActive ? 'panel' : 'panel.users';
+
+        return redirect()->route($section)->with('success', $isActive ? 'Usuario reactivado.' : 'Usuario desactivado.');
+    }
+
+    /**
+     * @return array{name: string, username: string, email: string, password?: string, is_admin?: bool|int|string}
+     */
+    private function validateUser(Request $request, ?User $user = null, bool $profileOnly = false): array
+    {
+        $username = $request->input('username');
+        if (is_string($username)) {
+            $request->merge(['username' => strtolower($username)]);
+        }
+
+        $uniqueUsername = Rule::unique('users', 'username');
+        $uniqueEmail = Rule::unique('users', 'email');
+        if ($user !== null) {
+            $uniqueUsername->ignore($user);
+            $uniqueEmail->ignore($user);
+        }
+
+        $rules = [
+            'name' => ['required', 'string', 'max:255'],
+            'username' => ['required', 'string', 'max:100', 'regex:/\A[A-Za-z0-9_.-]+\z/D', $uniqueUsername],
+            'email' => ['required', 'email', 'max:255', $uniqueEmail],
+        ];
+        if (! $profileOnly) {
+            $rules['is_admin'] = [$user === null ? 'sometimes' : 'required', 'boolean'];
+        }
+        if ($user === null) {
+            $rules['password'] = ['required', 'confirmed', Password::min(12)];
+        }
+
+        return $request->validate($rules, [
+            'is_admin.boolean' => 'Indique si la cuenta debe ser de administrador.',
+        ]);
+    }
+
+    /**
+     * @param  array{is_admin?: bool, is_active?: bool}  $access
+     * @param  array{name?: string, username?: string, email?: string}  $profile
+     */
+    private function changeUserAccess(User $actor, User $target, array $access, array $profile = []): void
+    {
+        DB::transaction(function () use ($actor, $target, $access, $profile): void {
+            $accounts = User::query()
+                ->whereKey([$actor->id, $target->id])
+                ->orWhere(fn ($query) => $query->where('is_admin', true)->where('is_active', true))
+                ->orderBy('id')->lockForUpdate()->get()->keyBy('id');
+
+            $currentActor = $accounts->get($actor->id);
+            abort_unless($currentActor?->is_admin && $currentActor->is_active && $currentActor->session_version === $actor->session_version, 403);
+            $user = $accounts->get($target->id);
+            abort_if($user === null, 404);
+
+            $isAdmin = $access['is_admin'] ?? $user->is_admin;
+            $isActive = $access['is_active'] ?? $user->is_active;
+            if ($user->is_admin && $user->is_active && (! $isAdmin || ! $isActive)
+                && ! $accounts->contains(fn (User $account): bool => ! $account->is($user) && $account->is_admin && $account->is_active)) {
+                $field = array_key_exists('is_active', $access) ? 'is_active' : 'is_admin';
+                throw ValidationException::withMessages([$field => 'Debe quedar al menos un administrador activo.']);
+            }
+
+            if ($user->is_active && ! $isActive) {
+                $user->session_version++;
+            }
+
+            $user->fill($profile);
+            $user->is_admin = $isAdmin;
+            $user->is_active = $isActive;
+            $user->save();
+        }, 3);
     }
 
     public function downloadWindowsAgent(string $package, WindowsAgentDownloads $agentDownloads): BinaryFileResponse
@@ -174,6 +387,33 @@ class PanelController extends Controller
             'Sincronización de tags completada.',
             'No fue posible sincronizar los tags. Revise el estado del proyecto.',
         );
+    }
+
+    public function syncAllProjectTags(ProjectTagSyncService $tagSync): RedirectResponse
+    {
+        $synced = 0;
+        $failed = 0;
+
+        foreach (Project::query()->lazyById() as $project) {
+            if ($tagSync->sync($project)) {
+                $synced++;
+            } else {
+                $failed++;
+            }
+        }
+
+        $total = $synced + $failed;
+        $response = redirect()->route('panel.projects');
+        if ($total === 0) {
+            return $response->with('success', 'No hay proyectos para sincronizar.');
+        }
+
+        $summary = "Se sincronizaron {$synced} de {$total} proyectos.";
+        if ($failed > 0) {
+            return $response->with('error', "{$summary} No se pudieron consultar {$failed}. Revise las tarjetas de los proyectos.");
+        }
+
+        return $response->with('success', $summary);
     }
 
     private function tagSyncResponse(Project $project, bool $synced, string $successMessage, string $errorMessage): RedirectResponse

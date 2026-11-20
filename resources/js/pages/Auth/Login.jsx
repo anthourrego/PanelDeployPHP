@@ -15,7 +15,7 @@ function Field({ children, error, label }) {
 
 export default function Login() {
     const form = useForm({
-        email: '',
+        username: '',
         password: '',
     });
 
@@ -40,14 +40,15 @@ export default function Login() {
                         <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Ingresa con tu cuenta para continuar.</p>
                     </div>
                     <form className="mt-8 space-y-5" onSubmit={submit}>
-                        <Field error={form.errors.email} label="Correo">
+                        <Field error={form.errors.username} label="Nombre de usuario">
                             <input
                                 autoComplete="username"
+                                autoCapitalize="none"
                                 className={inputClassName}
-                                onChange={(event) => form.setData('email', event.target.value)}
+                                onChange={(event) => form.setData('username', event.target.value)}
                                 required
-                                type="email"
-                                value={form.data.email}
+                                type="text"
+                                value={form.data.username}
                             />
                         </Field>
                         <Field error={form.errors.password} label="Contraseña">

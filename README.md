@@ -8,7 +8,13 @@ El resumen abre en `/`. También puede acceder directamente a `/programaciones`,
 
 Use el botón de sol o luna en la cabecera del panel o en el inicio de sesión para cambiar entre tema claro y oscuro. La preferencia se guarda en el navegador; el tema inicial es claro.
 
-Requiere PHP 8.3 o superior, Composer, Node.js y SQLite o una base compatible con Laravel. Para desarrollo local: `composer install`, `npm install`, copiar `.env.example` a `.env` si falta, ejecutar `php artisan key:generate` una sola vez, `php artisan migrate` y `php artisan panel:create-user`. Ejecute `php artisan serve` y `npm run dev` en terminales separadas; ambos comandos sirven únicamente para desarrollo. Para compilar los recursos de producción ejecute `npm run build`. Las programaciones existentes pueden ejecutarse en cuanto un agente configurado se conecte.
+Requiere PHP 8.3 o superior, Composer, Node.js y SQLite o una base compatible con Laravel. Para desarrollo local: `composer install`, `npm install`, copiar `.env.example` a `.env` si falta, ejecutar `php artisan key:generate` una sola vez, `php artisan migrate` y `php artisan panel:create-user`. El comando solicita nombre, username, correo y contraseña; el primer usuario creado de una instalación nueva queda como administrador. El inicio de sesión usa el username (letras ASCII, números, punto, guion o guion bajo; no distingue mayúsculas); el correo se conserva como dato de contacto. Después de migrar una instalación existente, asigne manualmente un username único en minúsculas en `users.username` a cada cuenta antes de que inicie sesión; la migración deja esos valores vacíos y conserva el acceso de administrador para las cuentas existentes. Ejecute `php artisan serve` y `npm run dev` en terminales separadas; ambos comandos sirven únicamente para desarrollo. Para compilar los recursos de producción ejecute `npm run build`. Las programaciones existentes pueden ejecutarse en cuanto un agente configurado se conecte.
+
+La sección **Usuarios** solo está disponible para administradores. Al crear una cuenta, marque **Cuenta de administrador** para darle acceso a esta sección; la casilla está desmarcada por defecto. Use **Editar** para cambiar nombre, username, correo o rol. **Desactivar** bloquea el acceso e invalida las sesiones anteriores sin borrar el historial de despliegues. Al **Reactivar**, el usuario debe iniciar sesión otra vez. El último administrador activo no puede desactivarse ni perder su rol.
+
+Al crear o editar una cuenta, el username no admite espacios. El nombre visible sí puede contenerlos.
+
+Desde el menú del usuario en la cabecera, **Editar perfil** permite cambiar el nombre, el username y el correo sin modificar el rol. **Cambiar contraseña** pide la contraseña actual y la confirmación de la nueva; al guardar, las demás sesiones se invalidan.
 
 En producción configure HTTPS con certificado confiable para el panel, `APP_ENV=production`, `APP_DEBUG=false`, `APP_URL` HTTPS y `SESSION_SECURE_COOKIE=true`. Bloquee HTTP hacia el panel en la red: rechazar una petición HTTP en Laravel no impide que un token enviado por error haya viajado sin cifrar. Si HTTPS termina en un proxy, configure explícitamente solo las direcciones de proxies confiables en Laravel y bloquee el acceso directo; de lo contrario el panel rechazará las peticiones del agente. Proteja `.env`, la base, los logs y sus copias. No regenere `APP_KEY` en una instalación existente porque cifra los tokens Gitea.
 
@@ -17,6 +23,11 @@ Para SSH, instale Git y OpenSSH en el servidor central y configure una clave de 
 Registre proyecto, servidor y ruta absoluta del repositorio en ese servidor. Para SSH indique la URL exacta de clonación, como `git@servidor:Propietario/Repositorio.git` o `ssh://git@servidor:2222/Propietario/Repositorio.git`. Indique las rutas relativas protegidas y una rama, etiqueta o SHA de Gitea: el panel consulta por SSH, comprueba el commit y guarda su SHA y una copia de las rutas asignadas. Si una rama y una etiqueta comparten nombre, use `refs/heads/nombre` o `refs/tags/nombre`. Para consultar un SHA directamente, el servidor Git debe permitir obtener ese objeto. La hora se ingresa con zona IANA y se muestra en UTC. El panel no permite duplicar un mismo commit pendiente o activo para el mismo proyecto y servidor.
 
 La URL del repositorio queda fijada al programar. Cambiar a SSH un proyecto existente solo afecta nuevas programaciones. Cancele los trabajos pendientes anteriores desde el panel y vuelva a programarlos si necesitan usar la nueva URL; los trabajos activos no se pueden cancelar desde la interfaz.
+
+En **Proyectos → Sincronizar todos** puede consultar la última versión disponible de todos los repositorios registrados, incluidos los desactivados, sin iniciar despliegues. Si una consulta falla, el panel conserva la última versión conocida de ese proyecto y muestra el error en su tarjeta.
+Para consultar un solo proyecto, pulse el botón con el icono de actualización junto a **Última versión disponible**.
+
+Debajo de cada ruta asignada, **Última confirmada** muestra la referencia, el commit y la fecha del último despliegue exitoso en ese servidor. Este dato proviene del historial, no de una consulta en vivo: no detecta cambios manuales y se muestra una advertencia si un despliegue posterior dejó el estado incierto.
 
 ## Agente Windows
 

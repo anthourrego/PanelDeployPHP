@@ -11,12 +11,18 @@ use Illuminate\Validation\Rules\Password;
 
 Artisan::command('panel:create-user', function () {
     $name = $this->ask('Nombre');
+    $username = strtolower($this->ask('Nombre de usuario'));
     $email = $this->ask('Correo');
     $password = $this->secret('Contraseña (mínimo 12 caracteres)');
     $confirmation = $this->secret('Confirme la contraseña');
     $validator = Validator::make(
-        compact('name', 'email', 'password') + ['password_confirmation' => $confirmation],
-        ['name' => ['required', 'string', 'max:255'], 'email' => ['required', 'email', 'unique:users,email'], 'password' => ['required', 'confirmed', Password::min(12)]],
+        compact('name', 'username', 'email', 'password') + ['password_confirmation' => $confirmation],
+        [
+            'name' => ['required', 'string', 'max:255'],
+            'username' => ['required', 'string', 'max:100', 'regex:/\A[A-Za-z0-9_.-]+\z/D', 'unique:users,username'],
+            'email' => ['required', 'email', 'unique:users,email'],
+            'password' => ['required', 'confirmed', Password::min(12)],
+        ],
     );
     if ($validator->fails()) {
         foreach ($validator->errors()->all() as $error) {
@@ -25,8 +31,12 @@ Artisan::command('panel:create-user', function () {
 
         return 1;
     }
-    User::create(compact('name', 'email', 'password'));
-    $this->info('Usuario creado.');
+    $isFirstUser = ! User::query()->exists();
+    $user = User::create(compact('name', 'username', 'email', 'password'));
+    if ($isFirstUser) {
+        $user->forceFill(['is_admin' => true])->save();
+    }
+    $this->info($isFirstUser ? 'Usuario creado como administrador.' : 'Usuario creado.');
 
     return 0;
 })->purpose('Crear un usuario del panel');

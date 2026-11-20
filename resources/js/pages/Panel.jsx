@@ -1,9 +1,9 @@
 import { Head, Link, router, useForm } from '@inertiajs/react';
 import { useEffect, useRef, useState } from 'react';
-import { AssignmentModal, DeploymentModal, ProjectModal, ServerModal, SshModal, TokenModal, WindowsAgentGuideModal } from '../components/Modals';
+import { AssignmentModal, DeploymentModal, PasswordModal, ProjectModal, ServerModal, SshModal, TokenModal, WindowsAgentGuideModal } from '../components/Modals';
 import ThemeToggle from '../components/ThemeToggle';
 import { confirmAction, notifyError, notifySuccess } from '../lib/notify';
-import { Badge, Card, EmptyState, Icon, StatusBadge, dangerButton, primaryButton, secondaryButton } from '../components/ui';
+import { Badge, Card, EmptyState, Field, Hint, Icon, Modal, StatusBadge, dangerButton, inputClassName, primaryButton, secondaryButton } from '../components/ui';
 
 const SIDEBAR_KEY = 'panel.sidebar.collapsed';
 const ONLINE_WINDOW_MS = 5 * 60 * 1000;
@@ -14,6 +14,7 @@ const sections = [
     { key: 'projects', label: 'Proyectos', icon: 'folder' },
     { key: 'servers', label: 'Servidores', icon: 'server' },
     { key: 'downloads', label: 'Descargas', icon: 'download' },
+    { key: 'users', label: 'Usuarios', icon: 'users' },
 ];
 
 function runAction(method, url, { data, ...confirmation }) {
@@ -56,7 +57,7 @@ function StatCard({ icon, label, tone, value }) {
     );
 }
 
-function UserMenu({ onLogout, processing, user }) {
+function UserMenu({ onChangePassword, onEditProfile, onLogout, processing, user }) {
     const [open, setOpen] = useState(false);
     const container = useRef(null);
     const trigger = useRef(null);
@@ -111,6 +112,28 @@ function UserMenu({ onLogout, processing, user }) {
                         <p className="break-words text-sm font-bold text-slate-900 dark:text-slate-100">{user.name}</p>
                         <p className="mt-1 break-all text-xs text-slate-600 dark:text-slate-300">{user.email}</p>
                     </div>
+                    <button
+                        aria-haspopup="dialog"
+                        className="flex w-full items-center px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-white/10"
+                        onClick={() => {
+                            setOpen(false);
+                            onEditProfile();
+                        }}
+                        type="button"
+                    >
+                        Editar perfil
+                    </button>
+                    <button
+                        aria-haspopup="dialog"
+                        className="flex w-full items-center px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-white/10"
+                        onClick={() => {
+                            setOpen(false);
+                            onChangePassword();
+                        }}
+                        type="button"
+                    >
+                        Cambiar contraseña
+                    </button>
                     <button
                         className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-semibold text-red-800 transition hover:bg-red-50 disabled:opacity-60 dark:text-red-300 dark:hover:bg-red-950/60"
                         disabled={processing}
@@ -328,14 +351,14 @@ function ServersList({ servers, showActions = false }) {
     );
 }
 
-function ProjectsGrid({ onAssign, onSsh, projects }) {
-    const [syncingProjectIds, setSyncingProjectIds] = useState([]);
+function ProjectsGrid({ onAssign, onSsh, projects, syncAllUrl }) {
+    const [syncing, setSyncing] = useState(null);
 
-    function syncTags(projectId) {
-        setSyncingProjectIds((current) => [...current, projectId]);
-        router.post(`/projects/${projectId}/tags/sync`, {}, {
+    function syncTags(projectId = null) {
+        setSyncing(projectId ?? 'all');
+        router.post(projectId === null ? syncAllUrl : `/projects/${projectId}/tags/sync`, {}, {
             preserveScroll: true,
-            onFinish: () => setSyncingProjectIds((current) => current.filter((id) => id !== projectId)),
+            onFinish: () => setSyncing(null),
         });
     }
 
@@ -345,6 +368,12 @@ function ProjectsGrid({ onAssign, onSsh, projects }) {
 
     return (
         <div className="grid gap-5 md:grid-cols-2">
+            <div className="col-span-full flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm text-slate-600 dark:text-slate-300">Consulta la última versión disponible de cada proyecto sin iniciar despliegues.</p>
+                <button className={secondaryButton} disabled={syncing !== null} onClick={() => syncTags()} type="button">
+                    {syncing === 'all' ? 'Sincronizando todos…' : 'Sincronizar todos'}
+                </button>
+            </div>
             {projects.map((project) => (
                 <article className="flex flex-col rounded-2xl bg-white dark:bg-slate-900 p-5 shadow-sm ring-1 ring-slate-200 dark:ring-slate-700" key={project.id}>
                     <div className="flex items-start justify-between gap-3">
@@ -365,6 +394,16 @@ function ProjectsGrid({ onAssign, onSsh, projects }) {
                                         <div className="min-w-0">
                                             <span className="font-semibold text-slate-700 dark:text-slate-200">{server.name}</span>
                                             <code className="mt-0.5 block break-all text-xs text-slate-500 dark:text-slate-400">{server.path}</code>
+                                            <p className="mt-1 break-words text-xs text-slate-600 dark:text-slate-300">
+                                                {server.last_successful_deployment ? (
+                                                    <>Última confirmada: <span className="font-medium">{server.last_successful_deployment.ref.replace(/^refs\/(?:tags|heads)\//, '')}</span>
+                                                        {' · '}<code title={server.last_successful_deployment.commit}>{server.last_successful_deployment.commit.slice(0, 8)}</code>
+                                                        {' · '}{server.last_successful_deployment.finished_at} UTC
+                                                        {!server.deployment_uncertain && project.latest_tag_commit === server.last_successful_deployment.commit && ' · Coincide con el último tag consultado'}
+                                                    </>
+                                                ) : 'Sin despliegue confirmado para esta ruta.'}
+                                            </p>
+                                            {server.deployment_uncertain && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">Un despliegue posterior dejó la versión actual sin verificar.</p>}
                                         </div>
                                         <button
                                             aria-label={`Quitar ruta de ${server.name}`}
@@ -385,8 +424,8 @@ function ProjectsGrid({ onAssign, onSsh, projects }) {
                         ) : <p className="text-sm text-slate-500 dark:text-slate-400">Sin servidores asignados.</p>}
                     </div>
                     <div className="mt-4 rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
-                        <div className="flex flex-wrap items-start justify-between gap-3">
-                            <div>
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
                                 <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Última versión disponible</p>
                                 {project.latest_tag ? (
                                     <p className="mt-1 break-all text-sm font-semibold text-slate-700 dark:text-slate-200">
@@ -402,13 +441,15 @@ function ProjectsGrid({ onAssign, onSsh, projects }) {
                                 </p>
                             </div>
                             <button
+                                aria-busy={syncing === project.id}
                                 aria-label={`Sincronizar tags de ${project.name}`}
-                                className={secondaryButton}
-                                disabled={syncingProjectIds.includes(project.id)}
+                                className="grid size-10 shrink-0 place-items-center rounded-lg border border-slate-300 bg-white text-slate-700 shadow-sm transition enabled:cursor-pointer enabled:hover:border-slate-400 enabled:hover:bg-slate-100 enabled:active:bg-slate-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-prosof-action disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:enabled:hover:border-slate-500 dark:enabled:hover:bg-slate-700 dark:enabled:active:bg-slate-600"
+                                disabled={syncing !== null}
                                 onClick={() => syncTags(project.id)}
+                                title={syncing === project.id ? 'Sincronizando…' : 'Sincronizar tags'}
                                 type="button"
                             >
-                                {syncingProjectIds.includes(project.id) ? 'Sincronizando…' : 'Sincronizar tags'}
+                                <Icon className={`size-4 ${syncing === project.id ? 'motion-safe:animate-spin' : ''}`} name="refresh" />
                             </button>
                         </div>
                         {project.latest_tag_sync_error && <p className="mt-2 text-xs text-red-700 dark:text-red-300">{project.latest_tag_sync_error}</p>}
@@ -496,7 +537,161 @@ function WindowsAgentDownloads({ downloads, onOpenGuide }) {
     );
 }
 
-export default function Panel({ agentDownloads, deployments, projects, section, sectionUrls, servers, user }) {
+function UserForm({ editingUser, onClose, profile = false }) {
+    const form = useForm({
+        name: editingUser?.name ?? '',
+        username: editingUser?.username ?? '',
+        email: editingUser?.email ?? '',
+        password: '',
+        password_confirmation: '',
+        is_admin: editingUser?.is_admin ?? false,
+    });
+
+    function submit(event) {
+        event.preventDefault();
+        if (editingUser) {
+            form.transform(({ name, username, email, is_admin }) => (
+                profile ? { name, username, email } : { name, username, email, is_admin }
+            ));
+            form.patch(editingUser.update_url, { preserveScroll: true, onSuccess: onClose });
+        } else {
+            form.post('/usuarios', { onSuccess: () => form.reset() });
+        }
+    }
+
+    return (
+        <form className={`flex flex-col gap-4 ${editingUser ? '' : 'p-5'}`} onSubmit={submit}>
+            <Field error={form.errors.name} label="Nombre">
+                <input className={inputClassName} onChange={(event) => form.setData('name', event.target.value)} required value={form.data.name} />
+            </Field>
+            <Field error={form.errors.username} label="Nombre de usuario">
+                <input
+                    autoCapitalize="none"
+                    autoComplete="username"
+                    className={inputClassName}
+                    maxLength={100}
+                    onChange={(event) => form.setData('username', event.target.value)}
+                    pattern="[A-Za-z0-9_.\-]+"
+                    required
+                    title="Usa letras sin tildes, números, punto, guion o guion bajo, sin espacios."
+                    value={form.data.username}
+                />
+                <Hint>Sin espacios. Usa letras sin tildes, números, punto, guion o guion bajo.</Hint>
+            </Field>
+            <Field error={form.errors.email} label="Correo">
+                <input autoComplete="email" className={inputClassName} onChange={(event) => form.setData('email', event.target.value)} required type="email" value={form.data.email} />
+            </Field>
+            {!editingUser && (
+                <>
+                    <Field error={form.errors.password} label="Contraseña inicial">
+                        <input autoComplete="new-password" className={inputClassName} minLength={12} onChange={(event) => form.setData('password', event.target.value)} required type="password" value={form.data.password} />
+                        <Hint>Mínimo 12 caracteres. Compártela con el usuario por un canal seguro.</Hint>
+                    </Field>
+                    <Field error={form.errors.password_confirmation} label="Confirmar contraseña">
+                        <input autoComplete="new-password" className={inputClassName} minLength={12} onChange={(event) => form.setData('password_confirmation', event.target.value)} required type="password" value={form.data.password_confirmation} />
+                    </Field>
+                </>
+            )}
+            {!profile && <Field error={form.errors.is_admin} label={
+                <span className="flex items-center gap-2">
+                    <input checked={form.data.is_admin} className="size-4 accent-prosof-action" onChange={(event) => form.setData('is_admin', event.target.checked)} type="checkbox" />
+                    Cuenta de administrador
+                </span>
+            }>
+                <Hint>Esta cuenta podrá administrar usuarios.</Hint>
+            </Field>}
+            <div className="flex flex-wrap gap-2">
+                {editingUser && <button className={secondaryButton} disabled={form.processing} onClick={onClose} type="button">Cancelar</button>}
+                <button className={primaryButton} disabled={form.processing} type="submit">
+                    {form.processing ? 'Guardando…' : editingUser ? 'Guardar cambios' : 'Crear usuario'}
+                </button>
+            </div>
+        </form>
+    );
+}
+
+function UserAccessButton({ user }) {
+    const form = useForm({ is_active: !user.is_active });
+
+    async function toggle() {
+        const confirmed = await confirmAction({
+            title: user.is_active ? '¿Desactivar esta cuenta?' : '¿Reactivar esta cuenta?',
+            text: user.is_active
+                ? `${user.name} perderá acceso al panel. Su historial se conservará.`
+                : `${user.name} podrá volver a iniciar sesión.`,
+            confirmText: user.is_active ? 'Desactivar' : 'Reactivar',
+            danger: user.is_active,
+        });
+
+        if (confirmed) {
+            form.transform(() => ({ is_active: !user.is_active }));
+            form.patch(user.active_url, { preserveScroll: true });
+        }
+    }
+
+    return (
+        <button className={user.is_active ? dangerButton : `${secondaryButton} px-3! py-1.5! text-xs!`} disabled={form.processing} onClick={toggle} type="button">
+            {user.is_active ? 'Desactivar' : 'Reactivar'}
+        </button>
+    );
+}
+
+function UsersManagement({ users }) {
+    const [editingUser, setEditingUser] = useState(null);
+    const closeEdit = () => setEditingUser(null);
+
+    return (
+        <div className="grid gap-5 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+            <Card title="Crear usuario"><UserForm /></Card>
+            {editingUser && (
+                <Modal onClose={closeEdit} title={`Editar usuario · ${editingUser.name}`}>
+                    <UserForm editingUser={editingUser} key={editingUser.id} onClose={closeEdit} />
+                </Modal>
+            )}
+            <Card title={`Usuarios (${users.length})`}>
+                {users.length === 0 ? <EmptyState>No hay usuarios registrados.</EmptyState> : (
+                    <div className="overflow-x-auto">
+                        <table className="min-w-full divide-y divide-slate-200 text-left text-sm dark:divide-slate-700">
+                            <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-300">
+                                <tr>
+                                    <th className="px-4 py-3 font-semibold" scope="col">Usuario</th>
+                                    <th className="px-4 py-3 font-semibold" scope="col">Correo</th>
+                                    <th className="px-4 py-3 font-semibold" scope="col">Acceso</th>
+                                    <th className="px-4 py-3 font-semibold" scope="col">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                {users.map((listedUser) => (
+                                    <tr key={listedUser.id}>
+                                        <td className="px-4 py-3">
+                                            <p className="font-semibold text-slate-800 dark:text-slate-100">{listedUser.name}</p>
+                                            <p className="text-xs text-slate-500 dark:text-slate-400">{listedUser.username}</p>
+                                        </td>
+                                        <td className="whitespace-nowrap px-4 py-3 text-slate-600 dark:text-slate-300">{listedUser.email}</td>
+                                        <td className="px-4 py-3">
+                                            <div className="flex flex-col items-start gap-1">
+                                                <Badge tone={listedUser.is_admin ? 'info' : 'neutral'}>{listedUser.is_admin ? 'Administrador' : 'Usuario'}</Badge>
+                                                <Badge tone={listedUser.is_active ? 'success' : 'neutral'}>{listedUser.is_active ? 'Activa' : 'Desactivada'}</Badge>
+                                            </div>
+                                        </td>
+                                        <td className="px-4 py-3">
+                                            <div className="flex flex-wrap gap-2">
+                                                <button className={`${secondaryButton} px-3! py-1.5! text-xs!`} onClick={() => setEditingUser(listedUser)} type="button">Editar</button>
+                                                <UserAccessButton user={listedUser} />
+                                            </div>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
+                )}
+            </Card>
+        </div>
+    );
+}
+
+export default function Panel({ agentDownloads, canManageUsers = false, deployments, passwordUpdateUrl, profileUpdateUrl, projects, projectTagsSyncAllUrl, section, sectionUrls, servers, user, users = [] }) {
     const [modal, setModal] = useState(null);
     const [tokenReveal, setTokenReveal] = useState(null);
     const [menuOpen, setMenuOpen] = useState(false);
@@ -557,7 +752,8 @@ export default function Panel({ agentDownloads, deployments, projects, section, 
     const targets = deployments.flatMap((deployment) => deployment.targets);
     const pending = targets.filter((target) => target.status === 'pending').length;
     const problems = targets.filter((target) => ['failed', 'uncertain'].includes(target.status)).length;
-    const current = sections.find((item) => item.key === section);
+    const visibleSections = sections.filter((item) => item.key !== 'users' || canManageUsers);
+    const current = visibleSections.find((item) => item.key === section);
 
     const headerAction = {
         summary: { label: 'Programar despliegue', modal: { type: 'deployment' } },
@@ -581,7 +777,13 @@ export default function Panel({ agentDownloads, deployments, projects, section, 
                     <p className="hidden border-l border-green-900/15 pl-5 text-sm text-slate-600 sm:block dark:border-white/15 dark:text-slate-300">Panel de despliegues <span className="font-semibold text-slate-900 dark:text-white">:: Prosof SAS</span></p>
                     <div className="ml-auto flex items-center gap-3">
                         <ThemeToggle />
-                        <UserMenu onLogout={logout} processing={logoutForm.processing} user={user} />
+                        <UserMenu
+                            onChangePassword={() => setModal({ type: 'password' })}
+                            onEditProfile={() => setModal({ type: 'profile' })}
+                            onLogout={logout}
+                            processing={logoutForm.processing}
+                            user={user}
+                        />
                     </div>
                 </header>
 
@@ -596,7 +798,7 @@ export default function Panel({ agentDownloads, deployments, projects, section, 
                         </button>
                     </div>
                     <nav aria-label="Navegación principal" className="flex-1 space-y-1 overflow-y-auto px-2 pt-3">
-                        {sections.map((item) => (
+                        {visibleSections.map((item) => (
                             <Link
                                 aria-current={section === item.key ? 'page' : undefined}
                                 aria-label={item.label}
@@ -660,7 +862,12 @@ export default function Panel({ agentDownloads, deployments, projects, section, 
                         {section === 'deployments' && <Card title={`Programaciones (${deployments.length})`}><DeploymentsTable deployments={deployments} /></Card>}
 
                         {section === 'projects' && (
-                            <ProjectsGrid onAssign={(projectId) => setModal({ type: 'assignment', projectId })} onSsh={(project) => setModal({ type: 'ssh', project })} projects={projects} />
+                            <ProjectsGrid
+                                onAssign={(projectId) => setModal({ type: 'assignment', projectId })}
+                                onSsh={(project) => setModal({ type: 'ssh', project })}
+                                projects={projects}
+                                syncAllUrl={projectTagsSyncAllUrl}
+                            />
                         )}
 
                         {section === 'servers' && (
@@ -670,12 +877,20 @@ export default function Panel({ agentDownloads, deployments, projects, section, 
                         {section === 'downloads' && (
                             <WindowsAgentDownloads downloads={agentDownloads} onOpenGuide={() => setModal({ type: 'windows-agent-guide' })} />
                         )}
+
+                        {section === 'users' && <UsersManagement users={users} />}
                     </main>
                 </div>
                 </div>
             </div>
 
             {tokenReveal && <TokenModal onClose={() => setTokenReveal(null)} reveal={tokenReveal} />}
+            {modal?.type === 'password' && <PasswordModal onClose={closeModal} updateUrl={passwordUpdateUrl} />}
+            {modal?.type === 'profile' && (
+                <Modal onClose={closeModal} title="Editar perfil">
+                    <UserForm editingUser={{ ...user, update_url: profileUpdateUrl }} onClose={closeModal} profile />
+                </Modal>
+            )}
             {modal?.type === 'deployment' && <DeploymentModal onClose={closeModal} projects={projects.filter((project) => project.is_active)} servers={servers.filter((server) => server.is_active)} />}
             {modal?.type === 'project' && <ProjectModal onClose={closeModal} />}
             {modal?.type === 'server' && <ServerModal onClose={closeModal} />}

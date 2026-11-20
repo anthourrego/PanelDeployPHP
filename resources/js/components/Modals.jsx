@@ -33,6 +33,37 @@ function Bind({ form, name, ...props }) {
     return <input className={inputClassName} onChange={(event) => form.setData(name, event.target.value)} value={form.data[name]} {...props} />;
 }
 
+export function PasswordModal({ onClose, updateUrl }) {
+    const form = useForm({ current_password: '', password: '', password_confirmation: '' });
+
+    function submit(event) {
+        event.preventDefault();
+        form.patch(updateUrl, {
+            preserveScroll: true,
+            onSuccess: onClose,
+            onFinish: () => form.reset(),
+        });
+    }
+
+    return (
+        <Modal onClose={onClose} title="Cambiar contraseña">
+            <form className="space-y-4" onSubmit={submit}>
+                <Field error={form.errors.current_password} label="Contraseña actual">
+                    <Bind autoComplete="current-password" form={form} name="current_password" required type="password" />
+                </Field>
+                <Field error={form.errors.password} label="Nueva contraseña">
+                    <Bind autoComplete="new-password" form={form} minLength={12} name="password" required type="password" />
+                    <Hint>Mínimo 12 caracteres. Al guardar se cerrarán las demás sesiones.</Hint>
+                </Field>
+                <Field label="Confirmar nueva contraseña">
+                    <Bind autoComplete="new-password" form={form} minLength={12} name="password_confirmation" required type="password" />
+                </Field>
+                <Actions onClose={onClose} processing={form.processing} submitLabel="Cambiar contraseña" />
+            </form>
+        </Modal>
+    );
+}
+
 export function ProjectModal({ onClose }) {
     const { form, submit } = useModalForm({
         name: '', gitea_url: '', owner: '', repository: '', ssh_url: '', gitea_token: '', preserved_paths: '',
