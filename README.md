@@ -24,6 +24,8 @@ Registre proyecto, servidor y ruta absoluta del repositorio en ese servidor. Par
 
 La URL del repositorio queda fijada al programar. Cambiar a SSH un proyecto existente solo afecta nuevas programaciones. Cancele los trabajos pendientes anteriores desde el panel y vuelva a programarlos si necesitan usar la nueva URL; los trabajos activos no se pueden cancelar desde la interfaz.
 
+La programación utiliza un calendario en español y un campo de hora de 12 horas (AM/PM) con React Aria, compatibles con interacción táctil y teclado. El resumen muestra la fecha, la hora y la zona horaria elegidas; no se utiliza automáticamente la zona del dispositivo.
+
 En **Proyectos → Sincronizar todos** puede consultar la última versión disponible de todos los repositorios registrados, incluidos los desactivados, sin iniciar despliegues. Si una consulta falla, el panel conserva la última versión conocida de ese proyecto y muestra el error en su tarjeta.
 Para consultar un solo proyecto, pulse el botón con el icono de actualización junto a **Última versión disponible**.
 

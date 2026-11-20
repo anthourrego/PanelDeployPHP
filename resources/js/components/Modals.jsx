@@ -1,5 +1,6 @@
 import { useForm } from '@inertiajs/react';
 import { useEffect, useState } from 'react';
+import DeploymentSchedule from './DeploymentSchedule';
 import { Field, Hint, Icon, Modal, inputClassName, primaryButton, secondaryButton } from './ui';
 
 const modalActionsClassName = 'sticky bottom-[-1.25rem] -mx-4 -mb-5 flex justify-end gap-3 bg-white px-4 pb-5 pt-4 sm:-mx-6 sm:px-6 dark:bg-slate-900';
@@ -220,13 +221,16 @@ export function DeploymentModal({ onClose, projects, servers }) {
                         <button className={secondaryButton} onClick={() => { setReferenceError(''); setReload((current) => current + 1); }} type="button">Reintentar</button>
                     </div>
                 )}
-                <div className="grid gap-4 sm:grid-cols-2">
-                    <Field error={form.errors.scheduled_at} label="Fecha y hora"><Bind form={form} name="scheduled_at" required type="datetime-local" /></Field>
-                    <Field error={form.errors.timezone} label="Zona horaria">
-                        <Bind form={form} name="timezone" required />
-                        <Hint>Zona IANA, p. ej. America/Bogota.</Hint>
-                    </Field>
-                </div>
+                <DeploymentSchedule
+                    error={form.errors.scheduled_at}
+                    onChange={(value) => form.setData('scheduled_at', value)}
+                    timezone={form.data.timezone}
+                    value={form.data.scheduled_at}
+                />
+                <Field error={form.errors.timezone} label="Zona horaria">
+                    <Bind form={form} name="timezone" required />
+                    <Hint>Zona IANA, p. ej. America/Bogota.</Hint>
+                </Field>
                 <fieldset className="space-y-2">
                     <legend className="text-sm font-medium text-slate-700 dark:text-slate-200">Servidores</legend>
                     {servers.length > 0 ? servers.map((server) => (
@@ -242,7 +246,7 @@ export function DeploymentModal({ onClose, projects, servers }) {
                     )) : <p className="text-sm text-slate-500 dark:text-slate-400">Registre un servidor primero.</p>}
                     {form.errors.servers && <p className="text-sm text-red-700 dark:text-red-300">{form.errors.servers}</p>}
                 </fieldset>
-                <Actions disabled={!form.data.ref} onClose={onClose} processing={form.processing} submitLabel="Guardar programación" />
+                <Actions disabled={!form.data.ref || !form.data.scheduled_at} onClose={onClose} processing={form.processing} submitLabel="Guardar programación" />
             </form>
         </Modal>
     );
