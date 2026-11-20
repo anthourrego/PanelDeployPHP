@@ -8,6 +8,7 @@ use App\Models\Project;
 use App\Models\Server;
 use App\Services\ProjectTagSyncService;
 use App\Services\SshRepository;
+use App\Services\WindowsAgentDownloads;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Client\ConnectionException;
@@ -20,19 +21,22 @@ use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
 use RuntimeException;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class PanelController extends Controller
 {
-    public function index(Request $request, string $section): Response
+    public function index(Request $request, string $section, WindowsAgentDownloads $agentDownloads): Response
     {
         return Inertia::render('Panel', [
             'user' => $request->user()->only(['name', 'email']),
             'section' => $section,
+            'agentDownloads' => $section === 'downloads' ? fn (): array => $agentDownloads->links() : null,
             'sectionUrls' => [
                 'summary' => route('panel', absolute: false),
                 'deployments' => route('panel.deployments', absolute: false),
                 'projects' => route('panel.projects', absolute: false),
                 'servers' => route('panel.servers', absolute: false),
+                'downloads' => route('panel.downloads', absolute: false),
             ],
             'projects' => Project::with(['servers', 'latestDeployment.targets.server'])->orderBy('name')->get()->map(fn (Project $project): array => [
                 'id' => $project->id,
@@ -86,6 +90,18 @@ class PanelController extends Controller
                 ])->values(),
             ]),
         ]);
+    }
+
+    public function downloadWindowsAgent(string $package, WindowsAgentDownloads $agentDownloads): BinaryFileResponse
+    {
+        $file = $agentDownloads->file($package);
+        abort_if($file === null, 404, 'El archivo solicitado no está disponible.');
+
+        return response()->download($file, basename($file), [
+            'Content-Type' => str_ends_with($file, '.zip') ? 'application/zip' : 'application/octet-stream',
+            'Cache-Control' => 'private, no-store',
+            'X-Content-Type-Options' => 'nosniff',
+        ])->setPrivate();
     }
 
     public function project(Request $request, ProjectTagSyncService $tagSync): RedirectResponse

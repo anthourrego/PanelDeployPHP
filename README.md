@@ -1,10 +1,10 @@
 # Panel de despliegues
 
-Panel Laravel y agente PowerShell para programar un commit de Gitea en repositorios Git existentes de servidores Windows. **No está validado en Windows ni en la infraestructura real; no activar en producción sin pruebas y revisión operativa.** Gitea puede permanecer en HTTP si se usa SSH para consultar y descargar el repositorio. La conexión de los agentes al panel sigue requiriendo HTTPS.
+Panel Laravel y agente Windows para programar un commit de Gitea en repositorios Git existentes. **No activar en producción sin validar el agente en Windows y en un repositorio de pruebas.** Gitea puede permanecer en HTTP si se usa SSH para consultar y descargar el repositorio. La conexión de los agentes al panel sigue requiriendo HTTPS.
 
 ## Panel
 
-El resumen abre en `/`. También puede acceder directamente a `/programaciones`, `/proyectos` y `/servidores`; al recargar se conserva la sección indicada por la URL.
+El resumen abre en `/`. También puede acceder directamente a `/programaciones`, `/proyectos`, `/servidores` y `/descargas`; al recargar se conserva la sección indicada por la URL.
 
 Use el botón de sol o luna en la cabecera del panel o en el inicio de sesión para cambiar entre tema claro y oscuro. La preferencia se guarda en el navegador; el tema inicial es claro.
 
@@ -19,6 +19,39 @@ Registre proyecto, servidor y ruta absoluta del repositorio en ese servidor. Par
 La URL del repositorio queda fijada al programar. Cambiar a SSH un proyecto existente solo afecta nuevas programaciones. Cancele los trabajos pendientes anteriores desde el panel y vuelva a programarlos si necesitan usar la nueva URL; los trabajos activos no se pueden cancelar desde la interfaz.
 
 ## Agente Windows
+
+### Ejecutable e instalador
+
+El agente C# se distribuye para Windows x64 como `PanelDeployAgent.exe`. Incluye .NET y no usa PowerShell. Sigue necesitando Git y, para remotos SSH, OpenSSH. Usa la misma API del panel y el mismo formato de `config.json` y del resultado pendiente que el agente anterior.
+
+En **Descargas → Agente para Windows x64 → Guía de instalación** encontrará el paso a paso para instalar o actualizar el agente. La generación de tokens sigue en **Servidores**. Para habilitar las descargas, publique estos archivos en el **servidor del panel**:
+
+| Archivo generado | Destino dentro de PanelDeploy |
+|---|---|
+| `agent/dist/win-x64/setup/PanelDeploySetup.exe` | `storage/app/private/agent/win-x64/PanelDeploySetup.exe` |
+| `agent/dist/win-x64/agent/PanelDeployAgent.exe` | `storage/app/private/agent/win-x64/PanelDeployAgent.exe` |
+| `PanelDeployPowerShell.zip` (alternativa para TI) | `storage/app/private/agent/win-x64/PanelDeployPowerShell.zip` |
+
+Empaquete los ejecutables como artefactos del despliegue: no se incluyen en Git y el servidor web no necesita .NET para servirlos. Mantenga esa carpeta fuera de `public`, con permisos de lectura para el servidor web y de escritura solo para quien publica la versión. Las descargas requieren iniciar sesión; si falta un archivo, el panel indica que no se ha publicado. Si quiere mostrar el número de la versión, configure `WINDOWS_AGENT_VERSION` y regenere la caché de configuración si la usa.
+
+Para generar ambos ejecutables desde la raíz del repositorio con el SDK de .NET 10 (ejemplo en PowerShell):
+
+```powershell
+dotnet publish agent/PanelDeployAgent -c Release -r win-x64 --self-contained -p:PublishSingleFile=true -o agent/dist/win-x64/agent
+$agentExe = (Resolve-Path 'agent/dist/win-x64/agent/PanelDeployAgent.exe').Path
+dotnet publish agent/PanelDeploySetup -c Release -r win-x64 --self-contained -p:PublishSingleFile=true "-p:AgentExecutable=$agentExe" -o agent/dist/win-x64/setup
+```
+
+1. Prepare Git, la cuenta Windows con permiso para iniciar sesión como tarea por lotes, la confianza HTTPS del panel y el acceso al repositorio bajo esa cuenta. Genere el token del servidor con `php artisan panel:agent-token ID` en el panel y transfiéralo por un canal seguro.
+2. Descargue `PanelDeploySetup.exe` desde **Descargas** y ábralo en un Windows de pruebas. El instalador solicita elevación, la URL HTTPS del panel y la cuenta Windows. La contraseña y el token se leen sin mostrarlos.
+3. La instalación crea `C:\ProgramData\PanelDeploy` con permisos NTFS restringidos y registra la tarea `PanelDeployAgent` **deshabilitada**, cada cinco minutos. El binario y la configuración son de solo lectura para una cuenta de servicio no administradora; la cuenta puede escribir en `estado`. El instalador no sobrescribe una tarea o carpeta existente.
+4. Antes de habilitar la tarea desde el Programador de tareas, revise los trabajos pendientes (habilitarla puede ejecutar los vencidos). Pruebe el agente con la misma cuenta en un servidor y repositorio no productivos. Puede comprobar el resultado desde el panel y en el historial de la tarea.
+
+**Si ya existe una instalación PowerShell:** deshabilite la tarea y compruebe que no haya ejecuciones activas antes de cambiarla. Conserve `config.json`, la carpeta `estado` y sus permisos; coloque el ejecutable en la carpeta protegida. En la acción de la tarea, cambie el programa a `C:\ProgramData\PanelDeploy\PanelDeployAgent.exe` y los argumentos a `--config "C:\ProgramData\PanelDeploy\config.json"`. Revise los resultados pendientes antes de reactivarla. La acción anterior se puede restaurar con la tarea detenida.
+
+Desde macOS o Linux, `dotnet run --project tests/Agent/PanelDeployAgent.Tests.csproj` comprueba el cambio de commit y la protección de archivos con un Git local y SSH simulado. No sustituye una prueba integral del instalador, la tarea y los permisos en Windows.
+
+### Agente anterior de PowerShell (alternativa)
 
 Requiere Windows PowerShell 5.1 o compatible, Git, OpenSSH y acceso HTTPS al panel. Estas dependencias y las rutas deben verificarse en cada servidor. El repositorio debe tener un único `origin` exactamente igual a la URL SSH configurada en el proyecto. Bajo la cuenta que ejecutará la tarea, configure la clave SSH existente con acceso mínimo de lectura y registre en `known_hosts` la clave de host de Gitea, comprobando previamente su huella por un canal independiente. La autenticación debe funcionar sin interacción; el agente exige verificación estricta de la clave de host y nunca copia ni recibe la clave privada desde el panel. También admite repositorios HTTPS con certificado confiable y credenciales Git de solo lectura; no acepta HTTP ni contraseñas en la URL.
 
@@ -42,7 +75,15 @@ Requiere Windows PowerShell 5.1 o compatible, Git, OpenSSH y acceso HTTPS al pan
 
    El programador debe impedir instancias simultáneas; el agente también utiliza un mutex local. No desactive la validación TLS. Configure y pruebe primero en una copia no productiva.
 
-### Instalación asistida en Windows
+#### Instalación anterior con PowerShell
+
+Para publicar la descarga **Alternativa PowerShell**, desde la raíz del proyecto genere el ZIP con los dos scripts en el nivel raíz del archivo (ejemplo en PowerShell):
+
+```powershell
+Compress-Archive -LiteralPath 'agent/Install-PanelDeployAgent.ps1','agent/PanelDeployAgent.ps1' -DestinationPath 'PanelDeployPowerShell.zip' -Force
+```
+
+No agregue archivos de configuración ni credenciales al ZIP. Descárguelo desde **Descargas** y extraiga ambos scripts juntos antes de instalar.
 
 Para una instalación nueva, `agent/Install-PanelDeployAgent.ps1` crea `C:\ProgramData\PanelDeploy`, restringe su ACL a la cuenta indicada, administradores y SYSTEM, y registra la tarea `PanelDeployAgent` cada cinco minutos **deshabilitada**. No sobrescribe una instalación o tarea existente. Requiere PowerShell de Windows ejecutado como administrador, el módulo ScheduledTasks, y una cuenta con contraseña y permiso para iniciar sesión como tarea por lotes. La cuenta debe tener los permisos mínimos necesarios sobre el repositorio y acceso SSH sin interacción. La política de ejecución de PowerShell debe permitir ambos scripts; el instalador no la modifica.
 

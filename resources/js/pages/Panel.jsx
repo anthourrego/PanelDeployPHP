@@ -1,6 +1,6 @@
 import { Head, Link, router, useForm } from '@inertiajs/react';
 import { useEffect, useRef, useState } from 'react';
-import { AssignmentModal, DeploymentModal, ProjectModal, ServerModal, SshModal, TokenModal } from '../components/Modals';
+import { AssignmentModal, DeploymentModal, ProjectModal, ServerModal, SshModal, TokenModal, WindowsAgentGuideModal } from '../components/Modals';
 import ThemeToggle from '../components/ThemeToggle';
 import { confirmAction, notifyError, notifySuccess } from '../lib/notify';
 import { Badge, Card, EmptyState, Icon, StatusBadge, dangerButton, primaryButton, secondaryButton } from '../components/ui';
@@ -13,6 +13,7 @@ const sections = [
     { key: 'deployments', label: 'Programaciones', icon: 'rocket' },
     { key: 'projects', label: 'Proyectos', icon: 'folder' },
     { key: 'servers', label: 'Servidores', icon: 'server' },
+    { key: 'downloads', label: 'Descargas', icon: 'download' },
 ];
 
 function runAction(method, url, { data, ...confirmation }) {
@@ -468,7 +469,34 @@ function ProjectsGrid({ onAssign, onSsh, projects }) {
     );
 }
 
-export default function Panel({ deployments, projects, section, sectionUrls, servers, user }) {
+function WindowsAgentDownloads({ downloads, onOpenGuide }) {
+    return (
+        <Card title="Agente para Windows x64">
+            <div className="flex flex-col gap-3 px-5 py-4">
+                <p className="text-sm text-slate-600 dark:text-slate-300">
+                    Usa el instalador para una instalación nueva o descarga solo el agente para actualizar una existente.
+                    {(downloads?.installer || downloads?.agent) && downloads.version && <> Versión: {downloads.version}.</>}
+                </p>
+                <div className="flex flex-wrap items-center gap-3">
+                    {downloads?.installer
+                        ? <a className={primaryButton} download href={downloads.installer}>Descargar instalador (.exe)</a>
+                        : <span className="text-sm text-slate-600 dark:text-slate-300">Instalador no publicado.</span>}
+                    {downloads?.agent
+                        ? <a className={secondaryButton} download href={downloads.agent}>Descargar solo el agente (.exe)</a>
+                        : <span className="text-sm text-slate-600 dark:text-slate-300">Agente no publicado.</span>}
+                    <button aria-haspopup="dialog" className={secondaryButton} onClick={onOpenGuide} type="button">Guía de instalación</button>
+                </div>
+                <p className="text-sm text-slate-600 dark:text-slate-300">
+                    {downloads?.powershell
+                        ? <a className="font-semibold underline" download href={downloads.powershell}>Descargar alternativa PowerShell (.zip)</a>
+                        : 'Alternativa PowerShell no publicada.'}
+                </p>
+            </div>
+        </Card>
+    );
+}
+
+export default function Panel({ agentDownloads, deployments, projects, section, sectionUrls, servers, user }) {
     const [modal, setModal] = useState(null);
     const [tokenReveal, setTokenReveal] = useState(null);
     const [menuOpen, setMenuOpen] = useState(false);
@@ -595,9 +623,11 @@ export default function Panel({ deployments, projects, section, sectionUrls, ser
                                 <h1 className="font-display text-xl font-extrabold text-neutral-800 dark:text-slate-100">{current.label}</h1>
                                 <p className="hidden text-sm text-slate-600 sm:block dark:text-slate-300">¡Soluciones que evolucionan!</p>
                             </div>
-                            <button className={`${primaryButton} max-sm:w-full`} onClick={() => setModal(headerAction.modal)} type="button">
-                                <Icon className="size-4" name="plus" />{headerAction.label}
-                            </button>
+                            {headerAction && (
+                                <button className={`${primaryButton} max-sm:w-full`} onClick={() => setModal(headerAction.modal)} type="button">
+                                    <Icon className="size-4" name="plus" />{headerAction.label}
+                                </button>
+                            )}
                         </div>
                         {section === 'summary' && (
                             <>
@@ -633,7 +663,13 @@ export default function Panel({ deployments, projects, section, sectionUrls, ser
                             <ProjectsGrid onAssign={(projectId) => setModal({ type: 'assignment', projectId })} onSsh={(project) => setModal({ type: 'ssh', project })} projects={projects} />
                         )}
 
-                        {section === 'servers' && <Card title={`Servidores (${servers.length})`}><ServersList servers={servers} showActions /></Card>}
+                        {section === 'servers' && (
+                            <Card title={`Servidores (${servers.length})`}><ServersList servers={servers} showActions /></Card>
+                        )}
+
+                        {section === 'downloads' && (
+                            <WindowsAgentDownloads downloads={agentDownloads} onOpenGuide={() => setModal({ type: 'windows-agent-guide' })} />
+                        )}
                     </main>
                 </div>
                 </div>
@@ -645,6 +681,7 @@ export default function Panel({ deployments, projects, section, sectionUrls, ser
             {modal?.type === 'server' && <ServerModal onClose={closeModal} />}
             {modal?.type === 'assignment' && <AssignmentModal initialProjectId={modal.projectId} onClose={closeModal} projects={projects} servers={servers} />}
             {modal?.type === 'ssh' && <SshModal onClose={closeModal} project={modal.project} />}
+            {modal?.type === 'windows-agent-guide' && <WindowsAgentGuideModal onClose={closeModal} />}
         </>
     );
 }

@@ -173,6 +173,52 @@ export function SshModal({ onClose, project }) {
     );
 }
 
+export function WindowsAgentGuideModal({ onClose }) {
+    return (
+        <Modal onClose={onClose} title="Cómo instalar el agente de Windows">
+            <div className="flex flex-col gap-5 text-sm text-slate-700 dark:text-slate-300">
+                <ol className="flex list-decimal flex-col gap-3 pl-5 marker:font-bold">
+                    <li>
+                        <strong>Prepara Windows.</strong> Instala Git y, si usas repositorios SSH, OpenSSH. Verifica desde Windows que la URL HTTPS del panel abre sin alertas de certificado. La cuenta que ejecutará la tarea debe poder iniciar sesión como tarea por lotes y acceder al repositorio sin interacción.
+                    </li>
+                    <li>
+                        <strong>Registra el servidor y genera su token.</strong> En <strong>Servidores</strong>, busca el servidor y pulsa <strong>Generar token</strong>. Cópialo cuando aparezca: se muestra una sola vez. No lo compartas por chat ni correo.
+                    </li>
+                    <li>
+                        <strong>Instala el agente.</strong> Descarga el instalador y abre <code>PanelDeploySetup.exe</code> en el servidor Windows x64. Acepta la elevación e introduce la URL base HTTPS del panel (sin <code>/login</code>), la cuenta de Windows, su contraseña y el token del servidor.
+                    </li>
+                    <li>
+                        <strong>Valida y habilita la tarea.</strong> El instalador deja <code>PanelDeployAgent</code> deshabilitada. Antes de habilitarla en el <strong>Programador de tareas</strong>, revisa las programaciones pendientes: los trabajos vencidos pueden empezar en la primera ejecución. Haz la primera prueba en un servidor y un repositorio no productivos.
+                    </li>
+                    <li>
+                        <strong>Confirma la conexión.</strong> Una vez habilitada, la tarea se ejecuta cada cinco minutos. Comprueba en el panel que el servidor aparece en línea y revisa el resultado del despliegue de prueba.
+                    </li>
+                </ol>
+                <details className="rounded-lg bg-slate-100 p-3 dark:bg-slate-800">
+                    <summary className="cursor-pointer font-semibold">Instalación alternativa con PowerShell (TI)</summary>
+                    <div className="mt-2 flex flex-col gap-2">
+                        <ol className="flex list-decimal flex-col gap-2 pl-5">
+                            <li>Descarga y extrae el ZIP. Mantén <code>Install-PanelDeployAgent.ps1</code> y <code>PanelDeployAgent.ps1</code> en la misma carpeta.</li>
+                            <li>Abre Windows PowerShell como administrador en esa carpeta. Usa los scripts según la política de ejecución de tu organización y ejecuta el comando de abajo con la URL HTTPS real del panel.</li>
+                            <li>Introduce la cuenta Windows, su contraseña y el token del servidor cuando el instalador los solicite. La tarea queda deshabilitada; sigue los pasos 4 y 5 para validarla y habilitarla.</li>
+                        </ol>
+                        <code className="break-all">.\Install-PanelDeployAgent.ps1 -PanelUrl 'https://panel.ejemplo.local'</code>
+                    </div>
+                </details>
+                <details className="rounded-lg bg-slate-100 p-3 dark:bg-slate-800">
+                    <summary className="cursor-pointer font-semibold">Si ya tienes un agente instalado</summary>
+                    <p className="mt-2">
+                        Deshabilita la tarea y espera a que termine cualquier ejecución activa. Usa <strong>Descargar solo el agente</strong> y copia el ejecutable en la carpeta protegida, sin borrar <code>config.json</code> ni la carpeta <code>estado</code>. Si migras desde PowerShell, en una instalación con la ruta predeterminada usa <code className="break-all">C:\ProgramData\PanelDeploy\PanelDeployAgent.exe</code> como programa y <code className="break-all">--config "C:\ProgramData\PanelDeploy\config.json"</code> como argumentos. Revisa los resultados pendientes antes de habilitarla de nuevo.
+                    </p>
+                </details>
+                <div className={modalActionsClassName}>
+                    <button className={primaryButton} onClick={onClose} type="button">Listo</button>
+                </div>
+            </div>
+        </Modal>
+    );
+}
+
 export function TokenModal({ onClose, reveal }) {
     const [copied, setCopied] = useState(false);
 

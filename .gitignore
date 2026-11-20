@@ -21,6 +21,11 @@
 /storage/*.key
 /storage/pail
 /vendor
+/agent/**/bin/
+/agent/**/obj/
+/agent/dist/
+/tests/Agent/bin/
+/tests/Agent/obj/
 _ide_helper.php
 Homestead.json
 Homestead.yaml

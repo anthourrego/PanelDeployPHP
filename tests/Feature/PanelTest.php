@@ -10,6 +10,7 @@ use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Storage;
 use Inertia\Testing\AssertableInertia as Assert;
 use Tests\TestCase;
 
@@ -37,6 +38,7 @@ class PanelTest extends TestCase
             '/programaciones' => 'deployments',
             '/proyectos' => 'projects',
             '/servidores' => 'servers',
+            '/descargas' => 'downloads',
         ] as $url => $section) {
             $this->get($url)->assertInertia(fn (Assert $page) => $page
                 ->component('Panel')
@@ -58,9 +60,76 @@ class PanelTest extends TestCase
 
     public function test_direct_section_links_require_authentication(): void
     {
-        foreach (['/programaciones', '/proyectos', '/servidores'] as $url) {
+        foreach (['/programaciones', '/proyectos', '/servidores', '/descargas'] as $url) {
             $this->get($url)->assertRedirect('/login');
         }
+    }
+
+    public function test_windows_agent_downloads_require_authentication(): void
+    {
+        Storage::fake('local')->put('agent/win-x64/PanelDeploySetup.exe', 'installer fixture');
+
+        $this->get('/servidores/descargas/windows/installer')->assertRedirect('/login');
+    }
+
+    public function test_downloads_section_offers_published_windows_executables_separately_from_servers(): void
+    {
+        $disk = Storage::fake('local');
+        $disk->put('agent/win-x64/PanelDeploySetup.exe', 'installer fixture');
+        $disk->put('agent/win-x64/PanelDeployAgent.exe', 'agent fixture');
+        config(['services.windows_agent.version' => '1.2.3']);
+        $this->actingAs(User::factory()->create());
+
+        $this->get('/servidores')->assertInertia(fn (Assert $page) => $page->where('agentDownloads', null));
+
+        $this->get('/descargas')->assertInertia(fn (Assert $page) => $page
+            ->where('agentDownloads.version', '1.2.3')
+            ->where('agentDownloads.installer', '/servidores/descargas/windows/installer')
+            ->where('agentDownloads.agent', '/servidores/descargas/windows/agent'));
+
+        foreach (['installer' => 'PanelDeploySetup.exe', 'agent' => 'PanelDeployAgent.exe'] as $package => $name) {
+            $response = $this->get('/servidores/descargas/windows/'.$package)
+                ->assertOk()
+                ->assertDownload($name);
+
+            $this->assertSame($package.' fixture', $response->baseResponse->getFile()->getContent());
+            $this->assertTrue($response->headers->hasCacheControlDirective('private'));
+            $this->assertTrue($response->headers->hasCacheControlDirective('no-store'));
+        }
+    }
+
+    public function test_unpublished_windows_executables_and_unknown_packages_are_not_downloadable(): void
+    {
+        $disk = Storage::fake('local');
+        $disk->put('agent/win-x64/PanelDeployAgent.exe', 'agent fixture');
+        $disk->put('agent/win-x64/config.json', 'private fixture');
+        $this->actingAs(User::factory()->create());
+
+        $this->get('/descargas')->assertInertia(fn (Assert $page) => $page
+            ->where('agentDownloads.installer', null)
+            ->where('agentDownloads.agent', '/servidores/descargas/windows/agent'));
+        $this->get('/servidores/descargas/windows/installer')->assertNotFound();
+        $this->get('/servidores/descargas/windows/config.json')->assertNotFound();
+    }
+
+    public function test_powershell_zip_is_downloadable_only_after_publication_and_login(): void
+    {
+        $disk = Storage::fake('local');
+        $url = '/servidores/descargas/windows/powershell';
+
+        $this->get($url)->assertRedirect('/login');
+        $this->actingAs(User::factory()->create());
+        $this->get($url)->assertNotFound();
+        $this->get('/descargas')->assertInertia(fn (Assert $page) => $page->where('agentDownloads.powershell', null));
+
+        $disk->put('agent/win-x64/PanelDeployPowerShell.zip', 'zip fixture');
+
+        $this->get('/descargas')->assertInertia(fn (Assert $page) => $page->where('agentDownloads.powershell', $url));
+        $response = $this->get($url)->assertOk()
+            ->assertDownload('PanelDeployPowerShell.zip')
+            ->assertHeader('Content-Type', 'application/zip');
+
+        $this->assertSame('zip fixture', $response->baseResponse->getFile()->getContent());
     }
 
     public function test_login_page_renders_as_an_inertia_page(): void

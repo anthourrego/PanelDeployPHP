@@ -18,6 +18,10 @@ return [
         'key' => env('POSTMARK_API_KEY'),
     ],
 
+    'windows_agent' => [
+        'version' => env('WINDOWS_AGENT_VERSION'),
+    ],
+
     'resend' => [
         'key' => env('RESEND_API_KEY'),
     ],

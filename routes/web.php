@@ -25,6 +25,8 @@ Route::middleware('auth')->group(function () {
     Route::get('/programaciones', [PanelController::class, 'index'])->defaults('section', 'deployments')->name('panel.deployments');
     Route::get('/proyectos', [PanelController::class, 'index'])->defaults('section', 'projects')->name('panel.projects');
     Route::get('/servidores', [PanelController::class, 'index'])->defaults('section', 'servers')->name('panel.servers');
+    Route::get('/descargas', [PanelController::class, 'index'])->defaults('section', 'downloads')->name('panel.downloads');
+    Route::get('/servidores/descargas/windows/{package}', [PanelController::class, 'downloadWindowsAgent'])->name('servers.agent.download');
     Route::post('/projects', [PanelController::class, 'project'])->name('projects.store');
     Route::post('/projects/{project}/ssh', [PanelController::class, 'sshRepository'])->name('projects.ssh');
     Route::post('/projects/{project}/tags/sync', [PanelController::class, 'syncProjectTags'])->middleware('throttle:5,1')->name('projects.tags.sync');
