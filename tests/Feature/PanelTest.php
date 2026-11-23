@@ -32,6 +32,16 @@ class PanelTest extends TestCase
             ->has('deployments', 0));
     }
 
+    public function test_panel_exposes_the_configured_deployment_timezone(): void
+    {
+        config(['app.deployment_timezone' => 'America/New_York']);
+
+        $this->actingAs(User::factory()->create())->get('/')->assertInertia(fn (Assert $page) => $page
+            ->component('Panel')
+            ->where('deploymentTimezone', 'America/New_York')
+            ->etc());
+    }
+
     public function test_panel_sections_can_be_opened_directly_by_url(): void
     {
         $this->actingAs(User::factory()->create());
@@ -801,7 +811,7 @@ class PanelTest extends TestCase
         ]);
         $data = [
             'project_id' => $project->id, 'servers' => [$server->id],
-            'scheduled_at' => now()->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'UTC',
+            'scheduled_at' => now('America/Bogota')->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'America/Bogota',
         ];
 
         $this->actingAs($user)->post('/deployments', $data + ['ref' => $sha])->assertInvalid(['ref']);
@@ -837,6 +847,50 @@ class PanelTest extends TestCase
             'scheduled_at' => now('America/Bogota')->addDays(2)->format('Y-m-d\TH:i'), 'timezone' => 'America/Bogota',
         ])->assertSessionHasErrors('servers');
         $this->assertDatabaseCount('deployments', 1);
+    }
+
+    public function test_deployment_uses_the_configured_timezone_and_stores_utc(): void
+    {
+        config(['app.deployment_timezone' => 'America/New_York']);
+        $this->travelTo(now()->setDate(2026, 11, 23)->setTime(12, 0));
+        Http::preventStrayRequests();
+        Http::fake(['https://gitea.test/api/v1/repos/team/app/branches?*' => Http::response([
+            ['name' => 'main', 'commit' => ['id' => str_repeat('a', 40)]],
+        ])]);
+        $user = User::factory()->create();
+        $project = $this->makeProject();
+        $server = Server::create(['name' => 'Servidor']);
+        $project->servers()->attach($server, ['path' => 'C:\\app']);
+
+        $this->actingAs($user)->post('/deployments', [
+            'project_id' => $project->id,
+            'servers' => [$server->id],
+            'ref' => 'refs/heads/main',
+            'scheduled_at' => '2026-11-24T09:00',
+            'timezone' => 'America/New_York',
+        ])->assertSessionHasNoErrors();
+
+        $this->assertDatabaseHas('deployments', ['scheduled_at' => '2026-11-24 14:00:00']);
+        Http::assertSentCount(1);
+    }
+
+    public function test_deployment_rejects_an_outdated_timezone(): void
+    {
+        config(['app.deployment_timezone' => 'America/New_York']);
+        $project = $this->makeProject();
+        $server = Server::create(['name' => 'Servidor']);
+
+        $this->actingAs(User::factory()->create())->post('/deployments', [
+            'project_id' => $project->id,
+            'servers' => [$server->id],
+            'ref' => 'refs/heads/main',
+            'scheduled_at' => '2026-11-24T09:00',
+            'timezone' => 'America/Bogota',
+        ])->assertSessionHasErrors([
+            'timezone' => 'La zona horaria de programación cambió. Recargue la página antes de continuar.',
+        ]);
+
+        $this->assertDatabaseCount('deployments', 0);
     }
 
     public function test_project_shows_its_latest_deployment_and_target_statuses(): void
@@ -914,7 +968,7 @@ class PanelTest extends TestCase
         Http::fake(['*' => Http::response([], 404)]);
         $project = Project::create(['name' => 'Proyecto', 'gitea_url' => 'https://gitea.test', 'owner' => 'team', 'repository' => 'app', 'preserved_paths' => []]);
         $server = Server::create(['name' => 'Servidor']);
-        $data = ['project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'refs/heads/missing', 'scheduled_at' => now()->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'UTC'];
+        $data = ['project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'refs/heads/missing', 'scheduled_at' => now('America/Bogota')->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'America/Bogota'];
         $this->actingAs(User::factory()->create())->post('/deployments', $data)->assertSessionHasErrors('servers');
         $project->servers()->attach($server, ['path' => 'C:\\app']);
         $this->post('/deployments', $data)->assertSessionHasErrors('ref');
@@ -927,7 +981,7 @@ class PanelTest extends TestCase
         $project->servers()->syncWithoutDetaching([$server->id => ['path' => 'C:\\app']]);
         $this->actingAs($user)->post('/deployments', [
             'project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'refs/heads/main',
-            'scheduled_at' => now()->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'UTC',
+            'scheduled_at' => now('America/Bogota')->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'America/Bogota',
         ])->assertSessionHasNoErrors();
     }
 
@@ -942,7 +996,7 @@ class PanelTest extends TestCase
         $project = $this->makeProject();
         $server = Server::create(['name' => 'Servidor']);
         $project->servers()->attach($server, ['path' => 'C:\\app']);
-        $data = ['project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'refs/heads/main', 'scheduled_at' => now()->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'UTC'];
+        $data = ['project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'refs/heads/main', 'scheduled_at' => now('America/Bogota')->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'America/Bogota'];
 
         $this->actingAs($user)->post("/servers/{$server->id}/active", ['is_active' => false])->assertSessionHasNoErrors();
         $this->post('/deployments', $data)->assertSessionHasErrors('servers');

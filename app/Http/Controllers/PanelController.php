@@ -42,6 +42,7 @@ class PanelController extends Controller
             'profileUpdateUrl' => route('profile.update', absolute: false),
             'passwordUpdateUrl' => route('profile.password.update', absolute: false),
             'projectTagsSyncAllUrl' => route('projects.tags.sync-all', absolute: false),
+            'deploymentTimezone' => config('app.deployment_timezone'),
             'canManageUsers' => $request->user()->is_admin,
             'section' => $section,
             'agentDownloads' => $section === 'downloads' ? fn (): array => $agentDownloads->links() : null,
@@ -478,9 +479,12 @@ class PanelController extends Controller
             'servers.*' => ['required', 'distinct', 'exists:servers,id'],
             'ref' => ['required', 'string', 'max:255', 'regex:~\Arefs/(?:heads|tags)/[^\x00-\x20\x7f]+\z~'],
             'scheduled_at' => ['required', 'date_format:Y-m-d\TH:i'],
-            'timezone' => ['required', 'timezone'],
-        ], ['ref.regex' => 'Seleccione una rama o etiqueta del proyecto.']);
-        $scheduledAt = CarbonImmutable::createFromFormat('!Y-m-d\TH:i', $data['scheduled_at'], $data['timezone']);
+            'timezone' => ['required', 'timezone', Rule::in([config('app.deployment_timezone')])],
+        ], [
+            'ref.regex' => 'Seleccione una rama o etiqueta del proyecto.',
+            'timezone.in' => 'La zona horaria de programación cambió. Recargue la página antes de continuar.',
+        ]);
+        $scheduledAt = CarbonImmutable::createFromFormat('!Y-m-d\TH:i', $data['scheduled_at'], config('app.deployment_timezone'));
         if ($scheduledAt->format('Y-m-d\TH:i') !== $data['scheduled_at']) {
             throw ValidationException::withMessages(['scheduled_at' => 'La hora no existe en la zona horaria indicada.']);
         }

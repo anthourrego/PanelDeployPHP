@@ -691,7 +691,7 @@ function UsersManagement({ users }) {
     );
 }
 
-export default function Panel({ agentDownloads, canManageUsers = false, deployments, passwordUpdateUrl, profileUpdateUrl, projects, projectTagsSyncAllUrl, section, sectionUrls, servers, user, users = [] }) {
+export default function Panel({ agentDownloads, canManageUsers = false, deployments, deploymentTimezone, passwordUpdateUrl, profileUpdateUrl, projects, projectTagsSyncAllUrl, section, sectionUrls, servers, user, users = [] }) {
     const [modal, setModal] = useState(null);
     const [tokenReveal, setTokenReveal] = useState(null);
     const [menuOpen, setMenuOpen] = useState(false);
@@ -891,7 +891,7 @@ export default function Panel({ agentDownloads, canManageUsers = false, deployme
                     <UserForm editingUser={{ ...user, update_url: profileUpdateUrl }} onClose={closeModal} profile />
                 </Modal>
             )}
-            {modal?.type === 'deployment' && <DeploymentModal onClose={closeModal} projects={projects.filter((project) => project.is_active)} servers={servers.filter((server) => server.is_active)} />}
+            {modal?.type === 'deployment' && <DeploymentModal onClose={closeModal} projects={projects.filter((project) => project.is_active)} servers={servers.filter((server) => server.is_active)} timezone={deploymentTimezone} />}
             {modal?.type === 'project' && <ProjectModal onClose={closeModal} />}
             {modal?.type === 'server' && <ServerModal onClose={closeModal} />}
             {modal?.type === 'assignment' && <AssignmentModal initialProjectId={modal.projectId} onClose={closeModal} projects={projects} servers={servers} />}

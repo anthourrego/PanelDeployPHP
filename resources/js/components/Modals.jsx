@@ -134,9 +134,9 @@ export function AssignmentModal({ onClose, projects, servers, initialProjectId =
     );
 }
 
-export function DeploymentModal({ onClose, projects, servers }) {
+export function DeploymentModal({ onClose, projects, servers, timezone }) {
     const { form, submit } = useModalForm({
-        project_id: '', ref: '', scheduled_at: '', timezone: 'America/Bogota', servers: [],
+        project_id: '', ref: '', scheduled_at: '', timezone, servers: [],
     }, '/deployments', onClose, []);
     const [references, setReferences] = useState(null);
     const [referenceError, setReferenceError] = useState('');
@@ -227,10 +227,8 @@ export function DeploymentModal({ onClose, projects, servers }) {
                     timezone={form.data.timezone}
                     value={form.data.scheduled_at}
                 />
-                <Field error={form.errors.timezone} label="Zona horaria">
-                    <Bind form={form} name="timezone" required />
-                    <Hint>Zona IANA, p. ej. America/Bogota.</Hint>
-                </Field>
+                <p className="text-sm text-slate-600 dark:text-slate-300">Zona horaria de programación: <strong>{timezone}</strong></p>
+                {form.errors.timezone && <p className="text-sm text-red-700 dark:text-red-300" role="alert">{form.errors.timezone}</p>}
                 <fieldset className="space-y-2">
                     <legend className="text-sm font-medium text-slate-700 dark:text-slate-200">Servidores</legend>
                     {servers.length > 0 ? servers.map((server) => (

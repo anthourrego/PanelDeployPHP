@@ -106,7 +106,7 @@ class SshRepositoryTest extends TestCase
             ->assertOk()->assertExactJson(['branches' => ['main'], 'tags' => ['v1.10.0', 'v1.9.9', 'v1']]);
         $this->post('/deployments', [
             'project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'refs/tags/v1',
-            'scheduled_at' => now()->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'UTC',
+            'scheduled_at' => now('America/Bogota')->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'America/Bogota',
         ])->assertSessionHasNoErrors();
         $this->assertDatabaseHas('deployments', ['repository_url' => 'git@gitea.test:team/app.git', 'commit' => $this->git(['rev-parse', 'HEAD'])]);
         $this->post('/projects/'.$project->id.'/ssh', ['ssh_url' => 'git@other.test:team/app.git'])->assertSessionHasNoErrors();
@@ -130,7 +130,7 @@ class SshRepositoryTest extends TestCase
         $project->servers()->attach($server, ['path' => 'C:\\app']);
         $this->actingAs(User::factory()->create())->post('/deployments', [
             'project_id' => $project->id, 'servers' => [$server->id], 'ref' => 'refs/heads/main',
-            'scheduled_at' => now()->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'UTC',
+            'scheduled_at' => now('America/Bogota')->addDay()->format('Y-m-d\TH:i'), 'timezone' => 'America/Bogota',
         ])->assertSessionHasErrors('ref');
         $this->assertDatabaseCount('deployments', 0);
     }

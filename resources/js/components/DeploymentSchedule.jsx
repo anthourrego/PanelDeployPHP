@@ -1,16 +1,25 @@
-import { parseDateTime, toCalendarDate, toCalendarDateTime, toTime } from '@internationalized/date';
-import { useState } from 'react';
+import { parseDateTime, today, toCalendarDate, toCalendarDateTime, toTime } from '@internationalized/date';
+import { useEffect, useState } from 'react';
 import {
     Button, Calendar, CalendarCell, CalendarGrid, CalendarGridBody,
     CalendarGridHeader, CalendarHeaderCell, DateInput, DateSegment,
     FieldError, Heading, I18nProvider, Label, TimeField,
 } from 'react-aria-components';
 
-const navigationButton = 'grid size-10 cursor-pointer place-items-center rounded-lg border border-slate-200 bg-white text-slate-700 transition hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-prosof-action dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700';
+const navigationButton = 'grid size-10 cursor-pointer place-items-center rounded-lg border border-slate-200 bg-white text-slate-700 transition hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-prosof-action disabled:cursor-not-allowed disabled:opacity-40 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700';
 
 export default function DeploymentSchedule({ error, onChange, timezone, value }) {
     const [date, setDate] = useState(() => value ? toCalendarDate(parseDateTime(value)) : null);
     const [time, setTime] = useState(() => value ? toTime(parseDateTime(value)) : null);
+    const minimumDate = today(timezone);
+    const selectedDate = date && date.compare(minimumDate) >= 0 ? date : null;
+
+    useEffect(() => {
+        if (date && !selectedDate) {
+            setDate(null);
+            onChange('');
+        }
+    }, [date, onChange, selectedDate]);
 
     function changeDate(nextDate) {
         setDate(nextDate);
@@ -19,7 +28,7 @@ export default function DeploymentSchedule({ error, onChange, timezone, value })
 
     function changeTime(nextTime) {
         setTime(nextTime);
-        onChange(date && nextTime ? toCalendarDateTime(date, nextTime).toString().slice(0, 16) : '');
+        onChange(selectedDate && nextTime ? toCalendarDateTime(selectedDate, nextTime).toString().slice(0, 16) : '');
     }
 
     return (
@@ -27,7 +36,7 @@ export default function DeploymentSchedule({ error, onChange, timezone, value })
             <fieldset className="min-w-0 space-y-3">
                 <legend className="mb-2 text-sm font-medium text-slate-700 dark:text-slate-200">Fecha y hora del despliegue</legend>
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 sm:p-4 dark:border-slate-700 dark:bg-slate-950">
-                    <Calendar aria-label="Fecha del despliegue" className="w-full text-slate-700 dark:text-slate-200" onChange={changeDate} value={date}>
+                    <Calendar aria-label="Fecha del despliegue" className="w-full text-slate-700 dark:text-slate-200" minValue={minimumDate} onChange={changeDate} value={selectedDate}>
                         <header className="mb-3 flex items-center justify-between gap-2">
                             <Button aria-label="Mes anterior" className={navigationButton} slot="previous">
                                 <span aria-hidden="true">&lsaquo;</span>
@@ -44,7 +53,7 @@ export default function DeploymentSchedule({ error, onChange, timezone, value })
                             <CalendarGridBody>
                                 {(day) => (
                                     <CalendarCell
-                                        className="flex min-h-10 cursor-pointer items-center justify-center rounded-lg text-sm outline-none transition hover:bg-slate-200 data-[outside-month]:text-slate-400 data-[selected]:bg-prosof-action data-[selected]:font-bold data-[selected]:text-white data-[focus-visible]:ring-2 data-[focus-visible]:ring-prosof-lime dark:hover:bg-slate-800 dark:data-[selected]:bg-prosof-action dark:data-[outside-month]:text-slate-600"
+                                        className="flex min-h-10 cursor-pointer items-center justify-center rounded-lg text-sm outline-none transition hover:bg-slate-200 data-[disabled]:cursor-not-allowed data-[disabled]:opacity-40 data-[disabled]:hover:bg-transparent data-[outside-month]:text-slate-400 data-[selected]:bg-prosof-action data-[selected]:font-bold data-[selected]:text-white data-[focus-visible]:ring-2 data-[focus-visible]:ring-prosof-lime dark:hover:bg-slate-800 dark:data-[disabled]:hover:bg-transparent dark:data-[selected]:bg-prosof-action dark:data-[outside-month]:text-slate-600"
                                         date={day}
                                     />
                                 )}
@@ -69,8 +78,8 @@ export default function DeploymentSchedule({ error, onChange, timezone, value })
                     </TimeField>
                 </div>
                 <p className="text-xs text-slate-600 dark:text-slate-300" role="status">
-                    {date && time ? (
-                        <>Programado para el {new Intl.DateTimeFormat('es-CO', { dateStyle: 'long', timeZone: 'UTC' }).format(date.toDate('UTC'))} a las {new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'UTC' }).format(toCalendarDateTime(date, time).toDate('UTC'))} · {timezone}</>
+                    {selectedDate && time ? (
+                        <>Programado para el {new Intl.DateTimeFormat('es-CO', { dateStyle: 'long', timeZone: 'UTC' }).format(selectedDate.toDate('UTC'))} a las {new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'UTC' }).format(toCalendarDateTime(selectedDate, time).toDate('UTC'))} · {timezone}</>
                     ) : 'Selecciona un día y completa la hora. Se utilizará la zona horaria indicada.'}
                 </p>
                 {error && <p className="text-sm text-red-700 dark:text-red-300" role="alert">{error}</p>}
