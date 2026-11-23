@@ -10,6 +10,7 @@ use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
+use Inertia\Testing\AssertableInertia as Assert;
 use RuntimeException;
 use Symfony\Component\Process\Process;
 use Tests\TestCase;
@@ -120,6 +121,54 @@ class SshRepositoryTest extends TestCase
         $project->deployments()->firstOrFail()->update(['scheduled_at' => now()->subMinute()]);
         $this->postJson('https://localhost/api/agent/claim', [], ['Authorization' => 'Bearer '.$server->id.'.'.str_repeat('a', 64)])
             ->assertJsonPath('repository_url', 'git@gitea.test:team/app.git');
+    }
+
+    public function test_project_compares_deployed_commits_through_ssh_without_an_https_api(): void
+    {
+        $initial = $this->git(['rev-parse', 'HEAD']);
+        file_put_contents($this->fixture.'/app.txt', 'available');
+        $this->git(['commit', '-qam', 'available']);
+        $available = $this->git(['rev-parse', 'HEAD']);
+        file_put_contents($this->fixture.'/app.txt', 'ahead');
+        $this->git(['commit', '-qam', 'ahead']);
+        $ahead = $this->git(['rev-parse', 'HEAD']);
+        $this->git(['checkout', '-qb', 'diverged', $initial]);
+        file_put_contents($this->fixture.'/app.txt', 'diverged');
+        $this->git(['commit', '-qam', 'diverged']);
+        $diverged = $this->git(['rev-parse', 'HEAD']);
+
+        $user = User::factory()->create();
+        $project = Project::create([
+            'name' => 'Proyecto', 'gitea_url' => 'http://gitea.test', 'owner' => 'team', 'repository' => 'app',
+            'ssh_url' => 'git@gitea.test:team/app.git', 'preserved_paths' => [],
+        ]);
+        $project->forceFill(['latest_tag' => 'v1.10.0', 'latest_tag_commit' => $available, 'latest_tag_synced_at' => now()])->save();
+        foreach (['behind' => $initial, 'ahead' => $ahead, 'diverged' => $diverged, 'missing' => str_repeat('f', 40)] as $name => $commit) {
+            $server = Server::create(['name' => $name]);
+            $project->servers()->attach($server, ['path' => 'C:\\app']);
+            $deployment = $project->deployments()->create([
+                'user_id' => $user->id, 'ref' => 'refs/heads/main', 'commit' => $commit,
+                'scheduled_at' => now(), 'repository_url' => $project->ssh_url,
+            ]);
+            $deployment->targets()->create([
+                'server_id' => $server->id, 'path' => 'C:\\app', 'preserved_paths' => [],
+            ])->forceFill(['status' => 'succeeded', 'finished_at' => now()])->save();
+        }
+
+        Http::preventStrayRequests();
+        $this->actingAs($user)->get('/proyectos')->assertOk()->assertInertia(fn (Assert $page) => $page
+            ->where('projects', function ($projects): bool {
+                $servers = collect($projects[0]['servers'])->keyBy('name');
+                $this->assertSame('behind', $servers['behind']['version_status']);
+                $this->assertSame('ahead', $servers['ahead']['version_status']);
+                $this->assertSame('unknown', $servers['diverged']['version_status']);
+                $this->assertSame('Los commits no pertenecen a la misma línea de desarrollo; puede haber divergencia.', $servers['diverged']['version_status_reason']);
+                $this->assertSame('unknown', $servers['missing']['version_status']);
+                $this->assertSame('No se pudo verificar la relación de commits con el repositorio.', $servers['missing']['version_status_reason']);
+
+                return true;
+            }));
+        Http::assertNothingSent();
     }
 
     public function test_insecure_http_does_not_resolve_a_version_without_ssh(): void

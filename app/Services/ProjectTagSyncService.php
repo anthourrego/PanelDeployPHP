@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Models\Project;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use RuntimeException;
@@ -85,6 +86,89 @@ class ProjectTagSyncService
         }
 
         throw new RuntimeException('La referencia no existe en el repositorio.');
+    }
+
+    public function isAncestor(Project $project, string $ancestorCommit, string $descendantCommit): bool
+    {
+        $ancestorCommit = strtolower($ancestorCommit);
+        $descendantCommit = strtolower($descendantCommit);
+        if (! preg_match('/\A[a-f0-9]{40}\z/D', $ancestorCommit) || ! preg_match('/\A[a-f0-9]{40}\z/D', $descendantCommit)) {
+            throw new RuntimeException('Los commits no tienen un formato válido.');
+        }
+
+        if ($ancestorCommit === $descendantCommit) {
+            return true;
+        }
+
+        if (parse_url($project->gitea_url, PHP_URL_SCHEME) !== 'https') {
+            throw new RuntimeException('La comparación de commits requiere una URL de Gitea con HTTPS.');
+        }
+
+        $repositoryKey = hash('sha256', implode('/', [
+            strtolower($project->gitea_url),
+            $project->owner,
+            $project->repository,
+        ]));
+        $cacheKey = "project-commit-ancestry:{$repositoryKey}:{$ancestorCommit}:{$descendantCommit}";
+        $comparison = Cache::remember($cacheKey, now()->addMinutes(5), function () use ($project, $ancestorCommit, $descendantCommit): array {
+            $url = $project->gitea_url.'/api/v1/repos/'
+                .rawurlencode($project->owner).'/'
+                .rawurlencode($project->repository).'/compare/'
+                .$ancestorCommit.'...'.$descendantCommit;
+
+            $request = Http::connectTimeout(3)
+                ->timeout(10)
+                ->withoutRedirecting()
+                ->acceptJson();
+
+            if ($project->gitea_token) {
+                $request = $request->withHeaders(['Authorization' => 'token '.$project->gitea_token]);
+            }
+
+            $response = $request->get($url, ['files' => false, 'verification' => false])->throw();
+            $comparison = json_decode($response->body());
+            if (! is_object($comparison) || ! is_array($comparison->commits ?? null)) {
+                throw new RuntimeException('Gitea devolvió una comparación de commits inválida.');
+            }
+
+            foreach ($comparison->commits as $commit) {
+                if (! is_object($commit) || ! is_array($commit->parents ?? [])) {
+                    throw new RuntimeException('Gitea devolvió un commit inválido en la comparación.');
+                }
+
+                foreach ($commit->parents ?? [] as $parent) {
+                    $sha = is_object($parent) ? ($parent->sha ?? null) : null;
+                    if (! is_string($sha) || ! preg_match('/\A[a-f0-9]{40}\z/iD', $sha)) {
+                        throw new RuntimeException('Gitea devolvió un padre de commit inválido.');
+                    }
+
+                    if (hash_equals($ancestorCommit, strtolower($sha))) {
+                        return ['is_ancestor' => true];
+                    }
+                }
+            }
+
+            return ['is_ancestor' => false];
+        });
+
+        return $comparison['is_ancestor'];
+    }
+
+    /**
+     * @return 'behind'|'ahead'|'diverged'
+     */
+    public function compareSshCommits(Project $project, string $deployedCommit, string $availableCommit): string
+    {
+        $repositoryKey = hash('sha256', implode('/', [$project->ssh_url, $project->owner, $project->repository]));
+        $cacheKey = 'project-ssh-commit-comparison:'.$repositoryKey.':'.strtolower($deployedCommit).':'.strtolower($availableCommit);
+
+        return Cache::remember($cacheKey, now()->addMinutes(5), fn (): string => $this->sshRepository->compareCommits(
+            $project->ssh_url,
+            $project->owner,
+            $project->repository,
+            $deployedCommit,
+            $availableCommit,
+        ));
     }
 
     /**

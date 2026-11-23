@@ -85,6 +85,47 @@ class SshRepository
     }
 
     /**
+     * @return 'behind'|'ahead'|'diverged'
+     */
+    public function compareCommits(string $url, string $owner, string $repository, string $deployedCommit, string $availableCommit): string
+    {
+        if (! self::validUrl($url, $owner, $repository)) {
+            throw new RuntimeException('La URL SSH no corresponde al repositorio configurado.');
+        }
+
+        if (! preg_match('/\A[a-f0-9]{40}\z/iD', $deployedCommit) || ! preg_match('/\A[a-f0-9]{40}\z/iD', $availableCommit)) {
+            throw new RuntimeException('Los commits no tienen un formato válido.');
+        }
+
+        $deployedCommit = strtolower($deployedCommit);
+        $availableCommit = strtolower($availableCommit);
+        $scratch = storage_path('app/private/git-'.Str::uuid());
+        if (! File::makeDirectory($scratch, 0700, true)) {
+            throw new RuntimeException('No se pudo crear el directorio temporal de Git.');
+        }
+
+        try {
+            $this->git(['init', '--bare', '--quiet', $scratch], $scratch);
+            $this->git(['-c', 'protocol.file.allow=never', 'fetch', '--no-tags', '--no-recurse-submodules', '--filter=blob:none', '--', $url, $deployedCommit, $availableCommit], $scratch, 30);
+            $this->git(['cat-file', '-e', $deployedCommit.'^{commit}'], $scratch);
+            $this->git(['cat-file', '-e', $availableCommit.'^{commit}'], $scratch);
+            $mergeBases = preg_split('/\R/', trim($this->git(['merge-base', '--all', $deployedCommit, $availableCommit], $scratch, 10, true)));
+
+            if (in_array($deployedCommit, $mergeBases, true)) {
+                return 'behind';
+            }
+
+            if (in_array($availableCommit, $mergeBases, true)) {
+                return 'ahead';
+            }
+
+            return 'diverged';
+        } finally {
+            File::deleteDirectory($scratch);
+        }
+    }
+
+    /**
      * @return list<array{name: string, commit: string}>
      */
     public function listTags(string $url, string $owner, string $repository): array
@@ -157,7 +198,7 @@ class SshRepository
         }
     }
 
-    private function git(array $arguments, string $path, int $timeout = 120): string
+    private function git(array $arguments, string $path, int $timeout = 120, bool $allowNoMergeBase = false): string
     {
         $result = Process::path($path)->timeout($timeout)->env([
             'GIT_TERMINAL_PROMPT' => '0',
@@ -169,7 +210,7 @@ class SshRepository
             'GIT_DIR' => false,
             'GIT_WORK_TREE' => false,
         ])->run(array_merge(['git'], $arguments));
-        if (! $result->successful()) {
+        if (! $result->successful() && ! ($allowNoMergeBase && $result->exitCode() === 1)) {
             throw new RuntimeException('Falló la consulta Git por SSH; compruebe la clave, la huella del servidor y la referencia.');
         }
 

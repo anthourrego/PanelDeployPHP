@@ -351,8 +351,9 @@ function ServersList({ servers, showActions = false }) {
     );
 }
 
-function ProjectsGrid({ onAssign, onSsh, projects, syncAllUrl }) {
+function ProjectsGrid({ onAssign, onScheduleUpdate, onSsh, projects, syncAllUrl }) {
     const [syncing, setSyncing] = useState(null);
+    const [selectedProjectId, setSelectedProjectId] = useState(projects[0]?.id ?? null);
 
     function syncTags(projectId = null) {
         setSyncing(projectId ?? 'all');
@@ -366,22 +367,83 @@ function ProjectsGrid({ onAssign, onSsh, projects, syncAllUrl }) {
         return <div className="rounded-2xl bg-white dark:bg-slate-900 shadow-sm ring-1 ring-slate-200 dark:ring-slate-700"><EmptyState>No hay proyectos registrados.</EmptyState></div>;
     }
 
+    const project = projects.find((listedProject) => listedProject.id === selectedProjectId) ?? projects[0];
+    const outdatedServers = project.servers.filter((server) => server.is_active && server.version_status === 'behind');
+
     return (
-        <div className="grid gap-5 md:grid-cols-2">
-            <div className="col-span-full flex flex-wrap items-center justify-between gap-3">
-                <p className="text-sm text-slate-600 dark:text-slate-300">Consulta la última versión disponible de cada proyecto sin iniciar despliegues.</p>
+        <div className="space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                    <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">Consulta servidores y versiones disponibles.</p>
+                    <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">La consulta de versiones no inicia despliegues.</p>
+                </div>
                 <button className={secondaryButton} disabled={syncing !== null} onClick={() => syncTags()} type="button">
                     {syncing === 'all' ? 'Sincronizando todos…' : 'Sincronizar todos'}
                 </button>
             </div>
-            {projects.map((project) => (
-                <article className="flex flex-col rounded-2xl bg-white dark:bg-slate-900 p-5 shadow-sm ring-1 ring-slate-200 dark:ring-slate-700" key={project.id}>
-                    <div className="flex items-start justify-between gap-3">
+            <div className="grid items-start gap-5 lg:grid-cols-[minmax(16rem,0.85fr)_minmax(0,1.8fr)]">
+                <aside className="overflow-hidden rounded-2xl bg-white/90 shadow-sm ring-1 ring-green-900/10 dark:bg-[#17251a] dark:ring-white/15" aria-label="Lista de proyectos">
+                    <div className="flex items-center justify-between gap-3 border-b border-green-900/10 px-4 py-4 dark:border-white/10">
                         <div>
-                            <h3 className="font-display text-lg font-bold text-neutral-800 dark:text-slate-100">{project.name}</h3>
-                            <p className="text-sm text-slate-500 dark:text-slate-400">{project.owner}/{project.repository}</p>
+                            <h2 className="font-display text-base font-bold text-neutral-800 dark:text-slate-100">Listado</h2>
+                            <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">Selecciona para ver detalles</p>
                         </div>
-                        <div className="flex gap-2">
+                        <Badge>{projects.length}</Badge>
+                    </div>
+                    <ul className="grid max-h-[min(32rem,65vh)] gap-1.5 overflow-y-auto p-2 sm:grid-cols-2 lg:grid-cols-1">
+                        {projects.map((listedProject) => {
+                            const pendingUpdates = listedProject.servers.filter((server) => server.is_active && server.version_status === 'behind').length;
+                            const isSelected = listedProject.id === project.id;
+
+                            return (
+                                <li key={listedProject.id}>
+                                    <button
+                                        aria-controls="project-details"
+                                        aria-pressed={isSelected}
+                                        className={`w-full rounded-xl border p-3 text-left transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-prosof-action ${
+                                            isSelected
+                                                ? 'border-prosof-dark/40 bg-prosof-lime/15 ring-1 ring-prosof-dark/20 dark:border-prosof-lime/40 dark:bg-prosof-lime/10 dark:ring-prosof-lime/20'
+                                                : 'border-transparent hover:border-slate-200 hover:bg-slate-50 dark:hover:border-slate-700 dark:hover:bg-slate-900'
+                                        }`}
+                                        onClick={() => setSelectedProjectId(listedProject.id)}
+                                        type="button"
+                                    >
+                                        <span className="flex items-start justify-between gap-2">
+                                            <span className="min-w-0">
+                                                <span className="block break-words text-sm font-semibold text-slate-800 dark:text-slate-100">{listedProject.name}</span>
+                                                <span className="mt-0.5 block break-all font-mono text-[11px] text-slate-500 dark:text-slate-400">{listedProject.owner}/{listedProject.repository}</span>
+                                            </span>
+                                            {pendingUpdates > 0 && <Badge tone="warning">{pendingUpdates}</Badge>}
+                                        </span>
+                                        <span className="mt-2 flex items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
+                                            <span className="inline-flex items-center gap-1.5">
+                                                <Icon className="size-3.5" name="server" />
+                                                {listedProject.servers.length} {listedProject.servers.length === 1 ? 'servidor' : 'servidores'}
+                                            </span>
+                                            <span className="max-w-[9rem] truncate font-medium text-slate-700 dark:text-slate-300">{listedProject.latest_tag ?? 'Sin versión'}</span>
+                                        </span>
+                                    </button>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                </aside>
+                <article
+                    aria-labelledby="project-detail-heading"
+                    className="flex flex-col overflow-hidden rounded-2xl border-t-4 border-t-prosof-lime bg-white/95 p-5 shadow-sm ring-1 ring-green-900/10 transition-shadow hover:shadow-md dark:bg-[#17251a] dark:ring-white/15"
+                    id="project-details"
+                >
+                    <div className="flex items-start justify-between gap-3">
+                        <div className="flex min-w-0 items-center gap-3">
+                            <span className="grid size-11 shrink-0 place-items-center rounded-xl bg-prosof-lime/20 text-prosof-dark dark:bg-prosof-lime/10 dark:text-prosof-lime">
+                                <Icon className="size-5" name="folder" />
+                            </span>
+                            <div className="min-w-0">
+                                <h2 className="break-words font-display text-lg font-bold text-neutral-800 dark:text-slate-100" id="project-detail-heading">{project.name}</h2>
+                                <p className="mt-0.5 break-all font-mono text-xs text-slate-500 dark:text-slate-400">{project.owner}/{project.repository}</p>
+                            </div>
+                        </div>
+                        <div className="flex shrink-0 flex-wrap justify-end gap-1.5">
                             {!project.is_active && <Badge tone="danger">Desactivado</Badge>}
                             <Badge tone={project.ssh_url ? 'success' : 'neutral'}>{project.ssh_url ? 'SSH' : 'Sin SSH'}</Badge>
                         </div>
@@ -390,24 +452,38 @@ function ProjectsGrid({ onAssign, onSsh, projects, syncAllUrl }) {
                         {project.servers.length > 0 ? (
                             <ul className="space-y-2">
                                 {project.servers.map((server) => (
-                                    <li className="flex items-start justify-between gap-2 rounded-lg bg-slate-50 dark:bg-slate-950 px-3 py-2 text-sm" key={server.id}>
-                                        <div className="min-w-0">
-                                            <span className="font-semibold text-slate-700 dark:text-slate-200">{server.name}</span>
-                                            <code className="mt-0.5 block break-all text-xs text-slate-500 dark:text-slate-400">{server.path}</code>
-                                            <p className="mt-1 break-words text-xs text-slate-600 dark:text-slate-300">
-                                                {server.last_successful_deployment ? (
-                                                    <>Última confirmada: <span className="font-medium">{server.last_successful_deployment.ref.replace(/^refs\/(?:tags|heads)\//, '')}</span>
-                                                        {' · '}<code title={server.last_successful_deployment.commit}>{server.last_successful_deployment.commit.slice(0, 8)}</code>
-                                                        {' · '}{server.last_successful_deployment.finished_at} UTC
-                                                        {!server.deployment_uncertain && project.latest_tag_commit === server.last_successful_deployment.commit && ' · Coincide con el último tag consultado'}
-                                                    </>
-                                                ) : 'Sin despliegue confirmado para esta ruta.'}
-                                            </p>
-                                            {server.deployment_uncertain && <p className="mt-1 text-xs text-amber-700 dark:text-amber-300">Un despliegue posterior dejó la versión actual sin verificar.</p>}
+                                    <li className="flex items-start gap-3 rounded-xl border border-slate-200/80 bg-slate-50/70 px-3 py-3 text-sm transition-colors hover:border-prosof-dark/25 hover:bg-white dark:border-slate-700 dark:bg-slate-950/60 dark:hover:border-prosof-lime/30 dark:hover:bg-slate-900" key={server.id}>
+                                        <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-lg bg-white text-slate-500 ring-1 ring-slate-200 dark:bg-slate-900 dark:text-slate-300 dark:ring-slate-700">
+                                            <Icon className="size-4" name="server" />
+                                        </span>
+                                        <div className="min-w-0 flex-1">
+                                            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+                                                <span className="font-semibold text-slate-700 dark:text-slate-200">{server.name}</span>
+                                                <div className="flex flex-wrap items-center gap-2">
+                                                    {!server.is_active && <Badge tone="danger">Desactivado</Badge>}
+                                                    {server.version_status === 'behind' && <Badge tone="warning">Versión inferior</Badge>}
+                                                    {server.version_status === 'current' && <Badge tone="success">Actualizado</Badge>}
+                                                    {server.version_status === 'ahead' && <Badge tone="info">Versión posterior</Badge>}
+                                                    {server.version_status === 'unknown' && project.latest_tag && <Badge>No comparable</Badge>}
+                                                </div>
+                                            </div>
+                                            <code className="mt-1 inline-flex max-w-full break-all rounded bg-white/80 px-1.5 py-0.5 font-mono text-[11px] text-slate-500 dark:bg-slate-900 dark:text-slate-400">{server.path}</code>
+                                            {server.last_successful_deployment && (
+                                                <p className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-slate-600 dark:text-slate-300">
+                                                    <span>Última confirmada</span>
+                                                    <span className="font-semibold">{server.last_successful_deployment.ref.replace(/^refs\/(?:tags|heads)\//, '')}</span>
+                                                    <code className="rounded bg-white/80 px-1 py-0.5 dark:bg-slate-900" title={server.last_successful_deployment.commit}>{server.last_successful_deployment.commit.slice(0, 8)}</code>
+                                                    <span>{server.last_successful_deployment.finished_at} UTC</span>
+                                                </p>
+                                            )}
+                                            {server.version_status === 'unknown' && server.version_status_reason && (
+                                                <p className="mt-2 break-words border-l-2 border-slate-300 pl-2 text-xs text-slate-600 dark:border-slate-600 dark:text-slate-300">{server.version_status_reason}</p>
+                                            )}
+                                            {server.deployment_uncertain && <p className="mt-2 border-l-2 border-amber-400 pl-2 text-xs text-amber-700 dark:text-amber-300">Un despliegue posterior dejó la versión actual sin verificar.</p>}
                                         </div>
                                         <button
                                             aria-label={`Quitar ruta de ${server.name}`}
-                                            className="shrink-0 rounded-md p-1.5 text-slate-400 dark:text-slate-400 transition hover:bg-red-50 dark:hover:bg-red-950/70 hover:text-red-700 dark:hover:text-red-300"
+                                            className="shrink-0 rounded-lg p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-700 dark:text-slate-400 dark:hover:bg-red-950/70 dark:hover:text-red-300"
                                             onClick={() => runAction('delete', `/projects/${project.id}/servers/${server.id}`, {
                                                 title: '¿Quitar esta ruta?',
                                                 text: `El proyecto dejará de poder desplegarse en ${server.name}.`,
@@ -423,13 +499,13 @@ function ProjectsGrid({ onAssign, onSsh, projects, syncAllUrl }) {
                             </ul>
                         ) : <p className="text-sm text-slate-500 dark:text-slate-400">Sin servidores asignados.</p>}
                     </div>
-                    <div className="mt-4 rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
+                    <div className="mt-4 rounded-xl border border-slate-200/80 bg-gradient-to-br from-slate-50 to-white p-3.5 dark:border-slate-700 dark:from-slate-900 dark:to-slate-950">
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Última versión disponible</p>
+                                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Última versión disponible</p>
                                 {project.latest_tag ? (
-                                    <p className="mt-1 break-all text-sm font-semibold text-slate-700 dark:text-slate-200">
-                                        {project.latest_tag}{project.latest_tag_commit && <> · <code className="text-xs">{project.latest_tag_commit.slice(0, 8)}</code></>}
+                                    <p className="mt-1.5 break-all font-display text-base font-bold text-slate-800 dark:text-slate-100">
+                                        {project.latest_tag}{project.latest_tag_commit && <> <code className="ml-1 rounded bg-white/80 px-1.5 py-0.5 font-mono text-[11px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-300">{project.latest_tag_commit.slice(0, 8)}</code></>}
                                     </p>
                                 ) : (
                                     <p className="mt-1 text-sm text-slate-600 dark:text-slate-300">
@@ -454,6 +530,27 @@ function ProjectsGrid({ onAssign, onSsh, projects, syncAllUrl }) {
                         </div>
                         {project.latest_tag_sync_error && <p className="mt-2 text-xs text-red-700 dark:text-red-300">{project.latest_tag_sync_error}</p>}
                     </div>
+                    {project.is_active && outdatedServers.length > 0 && (
+                        <div className="mt-4 flex flex-col gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-950/50 sm:flex-row sm:items-center sm:justify-between" role="status">
+                            <div className="flex items-start gap-3">
+                                <Icon className="mt-0.5 size-5 shrink-0 text-amber-700 dark:text-amber-300" name="alert" />
+                                <div className="min-w-0">
+                                    <p className="font-semibold text-amber-950 dark:text-amber-100">Actualización recomendada</p>
+                                    <p className="mt-1 text-sm text-amber-900 dark:text-amber-200">
+                                        {outdatedServers.length} {outdatedServers.length === 1 ? 'servidor tiene' : 'servidores tienen'} una versión anterior a {project.latest_tag}: {outdatedServers.map((server) => server.name).join(', ')}.
+                                    </p>
+                                </div>
+                            </div>
+                            <button
+                                aria-label={`Programar actualización de ${project.name} a ${project.latest_tag}`}
+                                className={`${primaryButton} shrink-0`}
+                                onClick={() => onScheduleUpdate(project.id, project.latest_tag, outdatedServers.map((server) => server.id))}
+                                type="button"
+                            >
+                                <Icon className="size-4" name="rocket" />Programar actualización
+                            </button>
+                        </div>
+                    )}
                     {project.latest_deployment && (
                         <div className="mt-4 rounded-lg bg-slate-50 p-3 dark:bg-slate-950">
                             <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Último lanzamiento</p>
@@ -505,7 +602,7 @@ function ProjectsGrid({ onAssign, onSsh, projects, syncAllUrl }) {
                         )}
                     </div>
                 </article>
-            ))}
+            </div>
         </div>
     );
 }
@@ -691,7 +788,7 @@ function UsersManagement({ users }) {
     );
 }
 
-export default function Panel({ agentDownloads, canManageUsers = false, deployments, deploymentTimezone, passwordUpdateUrl, profileUpdateUrl, projects, projectTagsSyncAllUrl, section, sectionUrls, servers, user, users = [] }) {
+export default function Panel({ agentDownloads, appVersion, canManageUsers = false, deployments, deploymentTimezone, passwordUpdateUrl, profileUpdateUrl, projects, projectTagsSyncAllUrl, section, sectionUrls, servers, user, users = [] }) {
     const [modal, setModal] = useState(null);
     const [tokenReveal, setTokenReveal] = useState(null);
     const [menuOpen, setMenuOpen] = useState(false);
@@ -758,7 +855,7 @@ export default function Panel({ agentDownloads, canManageUsers = false, deployme
     const headerAction = {
         summary: { label: 'Programar despliegue', modal: { type: 'deployment' } },
         deployments: { label: 'Programar despliegue', modal: { type: 'deployment' } },
-        projects: { label: 'Nuevo proyecto', modal: { type: 'project' } },
+        projects: { label: 'Nuevo', modal: { type: 'project' } },
         servers: { label: 'Nuevo servidor', modal: { type: 'server' } },
     }[section];
 
@@ -813,8 +910,10 @@ export default function Panel({ agentDownloads, canManageUsers = false, deployme
                             </Link>
                         ))}
                     </nav>
-                    <div className="space-y-1 px-2 pb-3">
-                        {!collapsed && <div className="hidden rounded-xl bg-slate-900/5 px-3 py-3 text-xs text-slate-600 dark:bg-black/20 dark:text-slate-300 lg:block"><p className="font-semibold">Prosof SAS</p><p className="mt-1">Panel de despliegues</p></div>}
+                    <div className="px-2 pb-3">
+                        <p aria-label={`Versión ${appVersion}`} className="break-all px-3 py-2 text-center text-xs text-slate-500 dark:text-slate-400" title={`Versión ${appVersion}`}>
+                            Versión: {appVersion}
+                        </p>
                     </div>
                 </aside>
 
@@ -826,7 +925,7 @@ export default function Panel({ agentDownloads, canManageUsers = false, deployme
                                 <p className="hidden text-sm text-slate-600 sm:block dark:text-slate-300">¡Soluciones que evolucionan!</p>
                             </div>
                             {headerAction && (
-                                <button className={`${primaryButton} max-sm:w-full`} onClick={() => setModal(headerAction.modal)} type="button">
+                                <button aria-label={section === 'projects' ? 'Crear proyecto' : undefined} className={`${primaryButton} max-sm:w-full`} onClick={() => setModal(headerAction.modal)} type="button">
                                     <Icon className="size-4" name="plus" />{headerAction.label}
                                 </button>
                             )}
@@ -864,6 +963,12 @@ export default function Panel({ agentDownloads, canManageUsers = false, deployme
                         {section === 'projects' && (
                             <ProjectsGrid
                                 onAssign={(projectId) => setModal({ type: 'assignment', projectId })}
+                                onScheduleUpdate={(projectId, version, serverIds) => setModal({
+                                    type: 'deployment',
+                                    projectId,
+                                    ref: `refs/tags/${version}`,
+                                    serverIds,
+                                })}
                                 onSsh={(project) => setModal({ type: 'ssh', project })}
                                 projects={projects}
                                 syncAllUrl={projectTagsSyncAllUrl}
@@ -891,7 +996,7 @@ export default function Panel({ agentDownloads, canManageUsers = false, deployme
                     <UserForm editingUser={{ ...user, update_url: profileUpdateUrl }} onClose={closeModal} profile />
                 </Modal>
             )}
-            {modal?.type === 'deployment' && <DeploymentModal onClose={closeModal} projects={projects.filter((project) => project.is_active)} servers={servers.filter((server) => server.is_active)} timezone={deploymentTimezone} />}
+            {modal?.type === 'deployment' && <DeploymentModal initialProjectId={modal.projectId ?? ''} initialRef={modal.ref ?? ''} initialServerIds={modal.serverIds ?? []} onClose={closeModal} projects={projects.filter((project) => project.is_active)} servers={servers.filter((server) => server.is_active)} timezone={deploymentTimezone} />}
             {modal?.type === 'project' && <ProjectModal onClose={closeModal} />}
             {modal?.type === 'server' && <ServerModal onClose={closeModal} />}
             {modal?.type === 'assignment' && <AssignmentModal initialProjectId={modal.projectId} onClose={closeModal} projects={projects} servers={servers} />}

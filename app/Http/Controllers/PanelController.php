@@ -33,7 +33,7 @@ use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 class PanelController extends Controller
 {
-    public function index(Request $request, string $section, WindowsAgentDownloads $agentDownloads): Response
+    public function index(Request $request, string $section, WindowsAgentDownloads $agentDownloads, ProjectTagSyncService $tagSync): Response
     {
         $serverVersions = $section === 'projects' ? $this->projectServerVersions() : collect();
 
@@ -41,6 +41,7 @@ class PanelController extends Controller
             'user' => $request->user()->only(['name', 'username', 'email']),
             'profileUpdateUrl' => route('profile.update', absolute: false),
             'passwordUpdateUrl' => route('profile.password.update', absolute: false),
+            'appVersion' => config('app.version'),
             'projectTagsSyncAllUrl' => route('projects.tags.sync-all', absolute: false),
             'deploymentTimezone' => config('app.deployment_timezone'),
             'canManageUsers' => $request->user()->is_admin,
@@ -69,39 +70,47 @@ class PanelController extends Controller
                 'downloads' => route('panel.downloads', absolute: false),
                 'users' => route('panel.users', absolute: false),
             ],
-            'projects' => Project::with(['servers', 'latestDeployment.targets.server'])->orderBy('name')->get()->map(fn (Project $project): array => [
-                'id' => $project->id,
-                'name' => $project->name,
-                'owner' => $project->owner,
-                'repository' => $project->repository,
-                'references_url' => route('projects.references', $project, absolute: false),
-                'servers' => $project->servers->map(fn (Server $server): array => [
-                    'id' => $server->id,
-                    'name' => $server->name,
-                    'path' => $server->pivot->path,
-                    ...$serverVersions->get("{$project->id}:{$server->id}", [
-                        'last_successful_deployment' => null,
-                        'deployment_uncertain' => false,
-                    ]),
-                ])->values(),
-                'ssh_url' => $project->ssh_url,
-                'is_active' => $project->is_active,
-                'has_deployments' => $project->deployments()->exists(),
-                'latest_tag' => $project->latest_tag,
-                'latest_tag_commit' => $project->latest_tag_commit,
-                'latest_tag_synced_at' => $project->latest_tag_synced_at?->format('Y-m-d H:i'),
-                'latest_tag_sync_error' => $project->latest_tag_sync_error,
-                'latest_deployment' => $project->latestDeployment === null ? null : [
-                    'ref' => $project->latestDeployment->ref,
-                    'commit' => $project->latestDeployment->commit,
-                    'created_at' => $project->latestDeployment->created_at->format('Y-m-d H:i'),
-                    'scheduled_at' => $project->latestDeployment->scheduled_at->format('Y-m-d H:i'),
-                    'targets' => $project->latestDeployment->targets->map(fn (DeploymentTarget $target): array => [
-                        'server_name' => $target->server->name,
-                        'status' => $target->status,
-                    ])->values(),
-                ],
-            ]),
+            'projects' => Project::with(['servers', 'latestDeployment.targets.server'])->orderBy('name')->get()->map(function (Project $project) use ($serverVersions, $tagSync): array {
+                return [
+                    'id' => $project->id,
+                    'name' => $project->name,
+                    'owner' => $project->owner,
+                    'repository' => $project->repository,
+                    'references_url' => route('projects.references', $project, absolute: false),
+                    'servers' => $project->servers->map(function (Server $server) use ($project, $serverVersions, $tagSync): array {
+                        $version = $serverVersions->get("{$project->id}:{$server->id}", [
+                            'last_successful_deployment' => null,
+                            'deployment_uncertain' => false,
+                        ]);
+
+                        return [
+                            'id' => $server->id,
+                            'name' => $server->name,
+                            'path' => $server->pivot->path,
+                            'is_active' => $server->is_active,
+                            ...$version,
+                            ...$this->projectVersionStatus($project, $version, $tagSync),
+                        ];
+                    })->values(),
+                    'ssh_url' => $project->ssh_url,
+                    'is_active' => $project->is_active,
+                    'has_deployments' => $project->deployments()->exists(),
+                    'latest_tag' => $project->latest_tag,
+                    'latest_tag_commit' => $project->latest_tag_commit,
+                    'latest_tag_synced_at' => $project->latest_tag_synced_at?->format('Y-m-d H:i'),
+                    'latest_tag_sync_error' => $project->latest_tag_sync_error,
+                    'latest_deployment' => $project->latestDeployment === null ? null : [
+                        'ref' => $project->latestDeployment->ref,
+                        'commit' => $project->latestDeployment->commit,
+                        'created_at' => $project->latestDeployment->created_at->format('Y-m-d H:i'),
+                        'scheduled_at' => $project->latestDeployment->scheduled_at->format('Y-m-d H:i'),
+                        'targets' => $project->latestDeployment->targets->map(fn (DeploymentTarget $target): array => [
+                            'server_name' => $target->server->name,
+                            'status' => $target->status,
+                        ])->values(),
+                    ],
+                ];
+            }),
             'servers' => Server::orderBy('name')->get()->map(fn (Server $server): array => [
                 'id' => $server->id,
                 'name' => $server->name,
@@ -162,6 +171,69 @@ class PanelController extends Controller
                 ],
                 'deployment_uncertain' => $row->latest_outcome === 'uncertain',
             ]]);
+    }
+
+    /**
+     * @param  array{last_successful_deployment: array{ref: string, commit: string, finished_at: string}|null, deployment_uncertain: bool}  $serverVersion
+     * @return array{version_status: string, version_status_reason: string|null}
+     */
+    private function projectVersionStatus(Project $project, array $serverVersion, ProjectTagSyncService $tagSync): array
+    {
+        $deployment = $serverVersion['last_successful_deployment'];
+        if ($project->latest_tag_sync_error !== null) {
+            return ['version_status' => 'unknown', 'version_status_reason' => 'No se pudieron sincronizar las etiquetas del repositorio.'];
+        }
+
+        if ($project->latest_tag_synced_at === null) {
+            return ['version_status' => 'unknown', 'version_status_reason' => 'Aún no se han sincronizado etiquetas para comparar.'];
+        }
+
+        if ($project->latest_tag === null || $project->latest_tag_commit === null) {
+            return ['version_status' => 'unknown', 'version_status_reason' => 'No hay una etiqueta SemVer disponible para comparar.'];
+        }
+
+        if ($serverVersion['deployment_uncertain']) {
+            return ['version_status' => 'unknown', 'version_status_reason' => 'El último despliegue no pudo confirmarse.'];
+        }
+
+        if ($deployment === null) {
+            return ['version_status' => 'unknown', 'version_status_reason' => 'No hay un despliegue exitoso confirmado para esta ruta.'];
+        }
+
+        if (hash_equals($project->latest_tag_commit, $deployment['commit'])) {
+            return ['version_status' => 'current', 'version_status_reason' => null];
+        }
+
+        try {
+            if ($project->ssh_url) {
+                $status = $tagSync->compareSshCommits($project, $deployment['commit'], $project->latest_tag_commit);
+                if ($status !== 'diverged') {
+                    return ['version_status' => $status, 'version_status_reason' => null];
+                }
+            } else {
+                if ($tagSync->isAncestor($project, $deployment['commit'], $project->latest_tag_commit)) {
+                    return ['version_status' => 'behind', 'version_status_reason' => null];
+                }
+
+                if ($tagSync->isAncestor($project, $project->latest_tag_commit, $deployment['commit'])) {
+                    return ['version_status' => 'ahead', 'version_status_reason' => null];
+                }
+            }
+        } catch (ConnectionException|RequestException|RuntimeException $exception) {
+            Log::warning('No se pudo comparar la versión desplegada con la disponible.', [
+                'project_id' => $project->id,
+                'deployed_commit' => $deployment['commit'],
+                'available_commit' => $project->latest_tag_commit,
+                'error_type' => get_class($exception),
+            ]);
+
+            return ['version_status' => 'unknown', 'version_status_reason' => 'No se pudo verificar la relación de commits con el repositorio.'];
+        }
+
+        return [
+            'version_status' => 'unknown',
+            'version_status_reason' => 'Los commits no pertenecen a la misma línea de desarrollo; puede haber divergencia.',
+        ];
     }
 
     public function createUser(Request $request): RedirectResponse

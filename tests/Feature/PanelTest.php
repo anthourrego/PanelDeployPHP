@@ -13,6 +13,7 @@ use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Testing\AssertableInertia as Assert;
 use Tests\TestCase;
@@ -40,6 +41,17 @@ class PanelTest extends TestCase
             ->component('Panel')
             ->where('deploymentTimezone', 'America/New_York')
             ->etc());
+    }
+
+    public function test_panel_exposes_its_configured_version_without_running_git(): void
+    {
+        config(['app.version' => '2.3.4']);
+        Process::fake();
+
+        $this->actingAs(User::factory()->create())->get('/')->assertOk()->assertInertia(fn (Assert $page) => $page
+            ->where('appVersion', '2.3.4'));
+
+        Process::assertNothingRan();
     }
 
     public function test_panel_sections_can_be_opened_directly_by_url(): void
@@ -961,6 +973,116 @@ class PanelTest extends TestCase
 
                 return true;
             }));
+    }
+
+    public function test_projects_recommend_newer_tags_only_when_the_server_commit_is_confirmed_behind(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->makeProject();
+        $project->forceFill([
+            'latest_tag' => 'v3.0.0',
+            'latest_tag_commit' => str_repeat('a', 40),
+            'latest_tag_synced_at' => now(),
+        ])->save();
+
+        $servers = collect([
+            'Atrasado',
+            'Actualizado',
+            'Rama atrasada',
+            'Rama no comparable',
+            'Versión posterior',
+            'Error de comparación',
+            'Incierto',
+            'Sin historial',
+        ])->mapWithKeys(fn (string $name): array => [$name => Server::create(['name' => $name])]);
+        $project->servers()->attach($servers->pluck('id')->all(), ['path' => 'C:\\app']);
+
+        $record = function (Server $server, string $ref, string $commit, string $status, string $finishedAt) use ($project, $user): void {
+            $deployment = $project->deployments()->create([
+                'user_id' => $user->id,
+                'ref' => $ref,
+                'commit' => $commit,
+                'scheduled_at' => $finishedAt,
+                'repository_url' => $project->gitea_url,
+            ]);
+            $deployment->targets()->create([
+                'server_id' => $server->id,
+                'path' => 'C:\\app',
+                'preserved_paths' => [],
+            ])->forceFill(['status' => $status, 'finished_at' => $finishedAt])->save();
+        };
+
+        $record($servers['Atrasado'], 'refs/tags/v2.9.9', str_repeat('b', 40), 'succeeded', '2026-11-20 10:00:00');
+        $record($servers['Actualizado'], 'refs/heads/main', str_repeat('a', 40), 'succeeded', '2026-11-20 11:00:00');
+        $record($servers['Rama no comparable'], 'refs/tags/v2.8.0', str_repeat('c', 40), 'succeeded', '2026-11-20 12:00:00');
+        $record($servers['Rama atrasada'], 'refs/heads/main', str_repeat('7', 40), 'succeeded', '2026-11-20 13:00:00');
+        $record($servers['Versión posterior'], 'refs/tags/v3.1.0', str_repeat('d', 40), 'succeeded', '2026-11-20 14:00:00');
+        $record($servers['Error de comparación'], 'refs/heads/main', str_repeat('6', 40), 'succeeded', '2026-11-20 15:00:00');
+        $record($servers['Incierto'], 'refs/tags/v2.0.0', str_repeat('e', 40), 'succeeded', '2026-11-20 16:00:00');
+        $record($servers['Incierto'], 'refs/tags/v2.0.0', str_repeat('f', 40), 'uncertain', '2026-11-20 17:00:00');
+
+        $failedSyncProject = $this->makeProject();
+        $failedSyncProject->forceFill([
+            'latest_tag' => 'v3.0.0',
+            'latest_tag_commit' => str_repeat('a', 40),
+            'latest_tag_synced_at' => now(),
+            'latest_tag_sync_error' => 'No fue posible consultar los tags.',
+        ])->save();
+        $failedSyncServer = Server::create(['name' => 'Sincronización fallida']);
+        $failedSyncProject->servers()->attach($failedSyncServer, ['path' => 'C:\\app']);
+        $recordForFailedSync = $failedSyncProject->deployments()->create([
+            'user_id' => $user->id,
+            'ref' => 'refs/tags/v2.0.0',
+            'commit' => str_repeat('b', 40),
+            'scheduled_at' => '2026-11-20 16:00:00',
+            'repository_url' => $failedSyncProject->gitea_url,
+        ]);
+        $recordForFailedSync->targets()->create([
+            'server_id' => $failedSyncServer->id,
+            'path' => 'C:\\app',
+            'preserved_paths' => [],
+        ])->forceFill(['status' => 'succeeded', 'finished_at' => '2026-11-20 17:00:00'])->save();
+
+        Http::preventStrayRequests();
+        Http::fake(function (ClientRequest $request) {
+            $path = parse_url($request->url(), PHP_URL_PATH);
+            if (is_string($path) && str_contains($path, '/compare/'.str_repeat('6', 40).'...'.str_repeat('a', 40))) {
+                return Http::response(['message' => 'Repositorio no disponible.'], 503);
+            }
+
+            $matchingParentCommit = match (true) {
+                is_string($path) && str_contains($path, '/compare/'.str_repeat('b', 40).'...'.str_repeat('a', 40)) => str_repeat('b', 40),
+                is_string($path) && str_contains($path, '/compare/'.str_repeat('7', 40).'...'.str_repeat('a', 40)) => str_repeat('7', 40),
+                is_string($path) && str_contains($path, '/compare/'.str_repeat('a', 40).'...'.str_repeat('d', 40)) => str_repeat('a', 40),
+                default => str_repeat('8', 40),
+            };
+
+            return Http::response([
+                'commits' => [['parents' => [['sha' => $matchingParentCommit]]]],
+            ]);
+        });
+        $this->actingAs($user)->get('/proyectos')->assertInertia(fn (Assert $page) => $page
+            ->component('Panel')
+            ->where('projects', function (Collection $projects) use ($project, $failedSyncProject, $servers, $failedSyncServer): bool {
+                $listedProjects = $projects->keyBy('id');
+                $listedServers = collect($listedProjects[$project->id]['servers'])->keyBy('id');
+
+                $this->assertSame('behind', $listedServers[$servers['Atrasado']->id]['version_status']);
+                $this->assertSame('current', $listedServers[$servers['Actualizado']->id]['version_status']);
+                $this->assertSame('unknown', $listedServers[$servers['Rama no comparable']->id]['version_status']);
+                $this->assertSame('Los commits no pertenecen a la misma línea de desarrollo; puede haber divergencia.', $listedServers[$servers['Rama no comparable']->id]['version_status_reason']);
+                $this->assertSame('behind', $listedServers[$servers['Rama atrasada']->id]['version_status']);
+                $this->assertSame('ahead', $listedServers[$servers['Versión posterior']->id]['version_status']);
+                $this->assertSame('unknown', $listedServers[$servers['Error de comparación']->id]['version_status']);
+                $this->assertSame('No se pudo verificar la relación de commits con el repositorio.', $listedServers[$servers['Error de comparación']->id]['version_status_reason']);
+                $this->assertSame('unknown', $listedServers[$servers['Incierto']->id]['version_status']);
+                $this->assertSame('unknown', $listedServers[$servers['Sin historial']->id]['version_status']);
+                $this->assertSame('unknown', collect($listedProjects[$failedSyncProject->id]['servers'])
+                    ->firstWhere('id', $failedSyncServer->id)['version_status']);
+
+                return true;
+            }));
+        Http::assertSentCount(7);
     }
 
     public function test_unknown_ref_or_unassigned_server_does_not_create_deployment(): void

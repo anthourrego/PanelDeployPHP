@@ -134,14 +134,17 @@ export function AssignmentModal({ onClose, projects, servers, initialProjectId =
     );
 }
 
-export function DeploymentModal({ onClose, projects, servers, timezone }) {
+export function DeploymentModal({ initialProjectId = '', initialRef = '', initialServerIds = [], onClose, projects, servers, timezone }) {
     const { form, submit } = useModalForm({
-        project_id: '', ref: '', scheduled_at: '', timezone, servers: [],
+        project_id: String(initialProjectId), ref: initialRef, scheduled_at: '', timezone,
+        servers: initialServerIds.map(String),
     }, '/deployments', onClose, []);
     const [references, setReferences] = useState(null);
     const [referenceError, setReferenceError] = useState('');
     const [reload, setReload] = useState(0);
     const referencesUrl = projects.find((project) => String(project.id) === form.data.project_id)?.references_url;
+    const initialTagName = initialRef.startsWith('refs/tags/') ? initialRef.slice('refs/tags/'.length) : '';
+    const initialTagMissing = references && initialTagName && form.data.ref === initialRef && !references.tags.includes(initialTagName);
 
     useEffect(() => {
         if (!referencesUrl) return;
@@ -200,6 +203,11 @@ export function DeploymentModal({ onClose, projects, servers, timezone }) {
                                 {references.tags.map((name) => <option key={name} value={`refs/tags/${name}`}>{name}</option>)}
                             </optgroup>
                         )}
+                        {initialTagMissing && (
+                            <optgroup label="Última etiqueta detectada">
+                                <option value={initialRef}>{initialTagName}</option>
+                            </optgroup>
+                        )}
                         {references?.branches.length > 0 && (
                             <optgroup label="Ramas">
                                 {references.branches.map((name) => <option key={name} value={`refs/heads/${name}`}>{name}</option>)}
@@ -244,7 +252,7 @@ export function DeploymentModal({ onClose, projects, servers, timezone }) {
                     )) : <p className="text-sm text-slate-500 dark:text-slate-400">Registre un servidor primero.</p>}
                     {form.errors.servers && <p className="text-sm text-red-700 dark:text-red-300">{form.errors.servers}</p>}
                 </fieldset>
-                <Actions disabled={!form.data.ref || !form.data.scheduled_at} onClose={onClose} processing={form.processing} submitLabel="Guardar programación" />
+                <Actions disabled={!form.data.ref || !form.data.scheduled_at || !references} onClose={onClose} processing={form.processing} submitLabel="Guardar programación" />
             </form>
         </Modal>
     );
