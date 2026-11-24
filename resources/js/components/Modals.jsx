@@ -1,7 +1,7 @@
 import { useForm } from '@inertiajs/react';
 import { useEffect, useState } from 'react';
 import DeploymentSchedule from './DeploymentSchedule';
-import { Field, Hint, Icon, Modal, inputClassName, primaryButton, secondaryButton } from './ui';
+import { Field, Hint, Icon, Modal, PasswordInput, inputClassName, primaryButton, secondaryButton } from './ui';
 
 const modalActionsClassName = 'sticky bottom-[-1.25rem] -mx-4 -mb-5 flex justify-end gap-3 bg-white px-4 pb-5 pt-4 sm:-mx-6 sm:px-6 dark:bg-slate-900';
 
@@ -50,14 +50,14 @@ export function PasswordModal({ onClose, updateUrl }) {
         <Modal onClose={onClose} title="Cambiar contraseña">
             <form className="space-y-4" onSubmit={submit}>
                 <Field error={form.errors.current_password} label="Contraseña actual">
-                    <Bind autoComplete="current-password" form={form} name="current_password" required type="password" />
+                    <PasswordInput autoComplete="current-password" description="contraseña actual" onChange={(event) => form.setData('current_password', event.target.value)} required value={form.data.current_password} />
                 </Field>
                 <Field error={form.errors.password} label="Nueva contraseña">
-                    <Bind autoComplete="new-password" form={form} minLength={12} name="password" required type="password" />
+                    <PasswordInput autoComplete="new-password" description="nueva contraseña" minLength={12} onChange={(event) => form.setData('password', event.target.value)} required value={form.data.password} />
                     <Hint>Mínimo 12 caracteres. Al guardar se cerrarán las demás sesiones.</Hint>
                 </Field>
                 <Field label="Confirmar nueva contraseña">
-                    <Bind autoComplete="new-password" form={form} minLength={12} name="password_confirmation" required type="password" />
+                    <PasswordInput autoComplete="new-password" description="confirmación de contraseña" minLength={12} onChange={(event) => form.setData('password_confirmation', event.target.value)} required value={form.data.password_confirmation} />
                 </Field>
                 <Actions onClose={onClose} processing={form.processing} submitLabel="Cambiar contraseña" />
             </form>

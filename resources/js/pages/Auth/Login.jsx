@@ -1,7 +1,8 @@
 import { Head, useForm } from '@inertiajs/react';
 import ThemeToggle from '../../components/ThemeToggle';
+import { PasswordInput } from '../../components/ui';
 
-const inputClassName = 'mt-2 w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-base text-slate-900 outline-none transition focus:border-prosof-dark focus:ring-2 focus:ring-prosof-lime/40 dark:border-white/20 dark:bg-[#101b14] dark:text-slate-100';
+const inputClassName = 'w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-base text-slate-900 outline-none transition focus:border-prosof-dark focus:ring-2 focus:ring-prosof-lime/40 dark:border-white/20 dark:bg-[#101b14] dark:text-slate-100';
 
 function Field({ children, error, label }) {
     return (
@@ -44,7 +45,7 @@ export default function Login() {
                             <input
                                 autoComplete="username"
                                 autoCapitalize="none"
-                                className={inputClassName}
+                                className={`mt-2 ${inputClassName}`}
                                 onChange={(event) => form.setData('username', event.target.value)}
                                 required
                                 type="text"
@@ -52,12 +53,12 @@ export default function Login() {
                             />
                         </Field>
                         <Field error={form.errors.password} label="Contraseña">
-                            <input
+                            <PasswordInput
                                 autoComplete="current-password"
                                 className={inputClassName}
+                                containerClassName="mt-2"
                                 onChange={(event) => form.setData('password', event.target.value)}
                                 required
-                                type="password"
                                 value={form.data.password}
                             />
                         </Field>

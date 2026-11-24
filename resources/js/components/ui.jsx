@@ -1,6 +1,7 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
-export const inputClassName = 'mt-1 w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2 text-base text-slate-900 dark:text-slate-100 outline-none sm:text-sm transition placeholder:text-slate-400 dark:placeholder:text-slate-400 focus:border-prosof-dark focus:ring-2 focus:ring-prosof-lime/40';
+const inputBaseClassName = 'w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2 text-base text-slate-900 dark:text-slate-100 outline-none sm:text-sm transition placeholder:text-slate-400 dark:placeholder:text-slate-400 focus:border-prosof-dark focus:ring-2 focus:ring-prosof-lime/40';
+export const inputClassName = `mt-1 ${inputBaseClassName}`;
 export const primaryButton = 'inline-flex items-center justify-center gap-2 rounded-lg bg-prosof-action px-4 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-prosof-action-hover disabled:cursor-not-allowed disabled:opacity-60';
 export const dangerButton = 'inline-flex items-center justify-center gap-2 rounded-lg border border-red-600 dark:border-red-800 bg-red-50 dark:bg-slate-900 px-3 py-1.5 text-xs font-semibold text-red-800 dark:text-red-300 transition hover:bg-red-100 dark:hover:bg-red-950/70 disabled:opacity-60';
 export const secondaryButton = 'inline-flex items-center justify-center gap-2 rounded-lg border border-slate-500 dark:border-slate-600 bg-slate-100 dark:bg-slate-900 px-4 py-2 text-sm font-semibold text-slate-800 dark:text-slate-200 transition hover:bg-slate-200 dark:hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60';
@@ -13,6 +14,7 @@ const icons = {
     rocket: 'M4.5 16.5c-1.5 1.3-2 5-2 5s3.7-.5 5-2M12 15l-3-3a22 22 0 0 1 2-4 12 12 0 0 1 11-5c0 3-1 8-5 11a22 22 0 0 1-4 2zM9 12H4s.6-3 2-4c1.6-1 5 0 5 0M12 15v5s3-.6 4-2c1-1.6 0-5 0-5',
     folder: 'M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z',
     server: 'M4 4h16v6H4zM4 14h16v6H4zM8 7h.01M8 17h.01',
+    user: 'M20 21a8 8 0 0 0-16 0m8-10a5 5 0 1 0 0-10 5 5 0 0 0 0 10Z',
     download: 'M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5',
     plus: 'M12 5v14M5 12h14',
     logout: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9',
@@ -26,6 +28,8 @@ const icons = {
     trash: 'M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6',
     power: 'M12 3v9M6.4 6.4a8 8 0 1 0 11.2 0',
     key: 'M21 2l-2 2m-7.6 7.6a5.5 5.5 0 1 1-7.8 7.8 5.5 5.5 0 0 1 7.8-7.8zm0 0L15.5 7.5m0 0 3 3L22 7l-3-3m-3.5 3.5L19 4',
+    eye: 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Zm10-3a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z',
+    eyeOff: 'M3 3l18 18M10.6 5.1A11 11 0 0 1 12 5c6.5 0 10 7 10 7a16 16 0 0 1-3.1 3.9M6.2 6.2A16.7 16.7 0 0 0 2 12s3.5 7 10 7a10.7 10.7 0 0 0 4.1-.8M9.9 9.9a3 3 0 0 0 4.2 4.2',
     copy: 'M9 9h11v11H9zM5 15H4V4h11v1',
     link: 'M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1',
 };
@@ -35,6 +39,33 @@ export function Icon({ className = 'size-5', name }) {
         <svg aria-hidden="true" className={className} fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.8" viewBox="0 0 24 24">
             <path d={icons[name]} />
         </svg>
+    );
+}
+
+export function PasswordInput({ className = inputBaseClassName, containerClassName = 'mt-1', description = 'contraseña', value, ...props }) {
+    const [visible, setVisible] = useState(false);
+
+    useEffect(() => {
+        if (!value) {
+            setVisible(false);
+        }
+    }, [value]);
+
+    const label = `${visible ? 'Ocultar' : 'Mostrar'} ${description}`;
+
+    return (
+        <span className={`relative flex items-center ${containerClassName}`}>
+            <input {...props} aria-label={description} className={`${className} pr-12`} type={visible ? 'text' : 'password'} value={value} />
+            <button
+                aria-label={label}
+                className="absolute right-1 grid size-10 place-items-center rounded-lg text-slate-600 transition hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-prosof-dark dark:text-slate-300 dark:hover:bg-white/10"
+                onClick={() => setVisible(!visible)}
+                title={label}
+                type="button"
+            >
+                <Icon className="size-5" name={visible ? 'eyeOff' : 'eye'} />
+            </button>
+        </span>
     );
 }
 

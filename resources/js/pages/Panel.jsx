@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AssignmentModal, DeploymentModal, PasswordModal, ProjectModal, ServerModal, SshModal, TokenModal, WindowsAgentGuideModal } from '../components/Modals';
 import ThemeToggle from '../components/ThemeToggle';
 import { confirmAction, notifyError, notifySuccess } from '../lib/notify';
-import { Badge, Card, EmptyState, Field, Hint, Icon, Modal, StatusBadge, dangerButton, inputClassName, primaryButton, secondaryButton, targetStatuses } from '../components/ui';
+import { Badge, Card, EmptyState, Field, Hint, Icon, Modal, PasswordInput, StatusBadge, dangerButton, inputClassName, primaryButton, secondaryButton, targetStatuses } from '../components/ui';
 
 const SIDEBAR_KEY = 'panel.sidebar.collapsed';
 const ONLINE_WINDOW_MS = 5 * 60 * 1000;
@@ -114,25 +114,25 @@ function UserMenu({ onChangePassword, onEditProfile, onLogout, processing, user 
                     </div>
                     <button
                         aria-haspopup="dialog"
-                        className="flex w-full items-center px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-white/10"
+                        className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-white/10"
                         onClick={() => {
                             setOpen(false);
                             onEditProfile();
                         }}
                         type="button"
                     >
-                        Editar perfil
+                        <Icon className="size-4" name="user" />Editar perfil
                     </button>
                     <button
                         aria-haspopup="dialog"
-                        className="flex w-full items-center px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-white/10"
+                        className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-semibold text-slate-700 transition hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-white/10"
                         onClick={() => {
                             setOpen(false);
                             onChangePassword();
                         }}
                         type="button"
                     >
-                        Cambiar contraseña
+                        <Icon className="size-4" name="key" />Cambiar contraseña
                     </button>
                     <button
                         className="flex w-full items-center gap-3 px-4 py-3 text-left text-sm font-semibold text-red-800 transition hover:bg-red-50 disabled:opacity-60 dark:text-red-300 dark:hover:bg-red-950/60"
@@ -752,11 +752,11 @@ function UserForm({ editingUser, onClose, profile = false }) {
             {!editingUser && (
                 <>
                     <Field error={form.errors.password} label="Contraseña inicial">
-                        <input autoComplete="new-password" className={inputClassName} minLength={12} onChange={(event) => form.setData('password', event.target.value)} required type="password" value={form.data.password} />
+                        <PasswordInput autoComplete="new-password" description="contraseña inicial" minLength={12} onChange={(event) => form.setData('password', event.target.value)} required value={form.data.password} />
                         <Hint>Mínimo 12 caracteres. Compártela con el usuario por un canal seguro.</Hint>
                     </Field>
                     <Field error={form.errors.password_confirmation} label="Confirmar contraseña">
-                        <input autoComplete="new-password" className={inputClassName} minLength={12} onChange={(event) => form.setData('password_confirmation', event.target.value)} required type="password" value={form.data.password_confirmation} />
+                        <PasswordInput autoComplete="new-password" description="confirmación de contraseña" minLength={12} onChange={(event) => form.setData('password_confirmation', event.target.value)} required value={form.data.password_confirmation} />
                     </Field>
                 </>
             )}
