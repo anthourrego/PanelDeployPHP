@@ -13,6 +13,7 @@ use App\Services\SshRepository;
 use App\Services\WindowsAgentDownloads;
 use Carbon\CarbonImmutable;
 use Illuminate\Database\Eloquent\Builder;
+use Illuminate\Database\QueryException;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
@@ -121,6 +122,7 @@ class PanelController extends Controller
                 return [
                     'id' => $project->id,
                     'name' => $project->name,
+                    'gitea_url' => $project->gitea_url,
                     'owner' => $project->owner,
                     'repository' => $project->repository,
                     'references_url' => route('projects.references', $project, absolute: false),
@@ -140,8 +142,12 @@ class PanelController extends Controller
                         ];
                     })->values(),
                     'ssh_url' => $project->ssh_url,
+                    'preserved_paths' => $project->preserved_paths,
+                    'has_gitea_token' => $project->getRawOriginal('gitea_token') !== null,
                     'is_active' => $project->is_active,
-                    'has_deployments' => $project->deployments()->exists(),
+                    'has_active_deployments' => $project->deployments()
+                        ->whereHas('targets', fn (Builder $targets): Builder => $targets->whereIn('status', ['pending', 'running']))
+                        ->exists(),
                     'latest_tag' => $project->latest_tag,
                     'latest_tag_commit' => $project->latest_tag_commit,
                     'latest_tag_synced_at' => $project->latest_tag_synced_at?->format('Y-m-d H:i'),
@@ -158,6 +164,14 @@ class PanelController extends Controller
                     ],
                 ];
             }),
+            'trashedProjects' => $section === 'projects'
+                ? Project::onlyTrashed()->orderBy('name')->get(['id', 'name', 'owner', 'repository'])->map(fn (Project $project): array => [
+                    'id' => $project->id,
+                    'name' => $project->name,
+                    'owner' => $project->owner,
+                    'repository' => $project->repository,
+                ])->all()
+                : [],
             'servers' => Server::orderBy('name')->get()->map(fn (Server $server): array => [
                 'id' => $server->id,
                 'name' => $server->name,
@@ -448,6 +462,50 @@ class PanelController extends Controller
 
     public function project(Request $request, ProjectTagSyncService $tagSync): RedirectResponse
     {
+        $data = $this->validatedProjectData($request);
+        $project = new Project($data);
+        $this->saveProject($project);
+        $synced = $tagSync->sync($project);
+
+        return $this->tagSyncResponse(
+            $project,
+            $synced,
+            'Proyecto registrado.',
+            'Proyecto registrado, pero no fue posible sincronizar sus tags. Revise el estado del proyecto.',
+        );
+    }
+
+    public function updateProject(Request $request, Project $project, ProjectTagSyncService $tagSync): RedirectResponse
+    {
+        $data = $this->validatedProjectData($request);
+        if (! isset($data['gitea_token'])) {
+            if ($project->gitea_token !== null && parse_url($data['gitea_url'], PHP_URL_SCHEME) !== 'https') {
+                throw ValidationException::withMessages(['gitea_token' => 'Un token de Gitea requiere HTTPS.']);
+            }
+            unset($data['gitea_token']);
+        }
+
+        $project->fill($data);
+        $shouldSyncTags = $project->isDirty(['gitea_url', 'owner', 'repository', 'ssh_url', 'gitea_token']);
+        $this->saveProject($project);
+
+        if (! $shouldSyncTags) {
+            return back()->with('success', 'Proyecto actualizado.');
+        }
+
+        return $this->tagSyncResponse(
+            $project,
+            $tagSync->sync($project),
+            'Proyecto actualizado.',
+            'Proyecto actualizado, pero no fue posible sincronizar sus tags. Revise el estado del proyecto.',
+        );
+    }
+
+    /**
+     * @return array{name: string, gitea_url: string, owner: string, repository: string, gitea_token?: string|null, ssh_url?: string|null, preserved_paths: list<string>}
+     */
+    private function validatedProjectData(Request $request): array
+    {
         $data = $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'gitea_url' => ['required', 'url:http,https', 'max:255'],
@@ -473,17 +531,56 @@ class PanelController extends Controller
                 throw ValidationException::withMessages(['preserved_paths' => 'Use rutas relativas con /, sin comodines, .git ni segmentos . o ...']);
             }
         }
+
         $data['preserved_paths'] = $paths;
         $data['gitea_url'] = rtrim($data['gitea_url'], '/');
-        $project = Project::create($data);
-        $synced = $tagSync->sync($project);
 
-        return $this->tagSyncResponse(
-            $project,
-            $synced,
-            'Proyecto registrado.',
-            'Proyecto registrado, pero no fue posible sincronizar sus tags. Revise el estado del proyecto.',
-        );
+        return $data;
+    }
+
+    private function saveProject(Project $project): void
+    {
+        $this->validateUniqueProject($project);
+
+        try {
+            $project->save();
+        } catch (QueryException $exception) {
+            $sqlServerDuplicate = $project->getConnection()->getDriverName() === 'sqlsrv'
+                && in_array((int) ($exception->errorInfo[1] ?? 0), [2601, 2627], true);
+            if ($exception instanceof UniqueConstraintViolationException || $sqlServerDuplicate) {
+                $this->validateUniqueProject($project);
+            }
+
+            throw $exception;
+        }
+    }
+
+    private function validateUniqueProject(Project $project): void
+    {
+        $otherProjects = Project::withTrashed()
+            ->when($project->exists, fn (Builder $query) => $query->where('id', '<>', $project->getKey()));
+
+        $matchingName = (clone $otherProjects)->where('name', $project->name)->first();
+        $matchingRepository = (clone $otherProjects)
+            ->where('gitea_url', $project->gitea_url)
+            ->where('owner', $project->owner)
+            ->where('repository', $project->repository)
+            ->first();
+
+        $errors = [];
+        if ($matchingName !== null) {
+            $errors['name'] = $matchingName->trashed()
+                ? 'Ya existe un proyecto con este nombre en la papelera. Restáurelo en lugar de crear otro.'
+                : 'Ya existe un proyecto con este nombre.';
+        }
+        if ($matchingRepository !== null) {
+            $errors['repository'] = $matchingRepository->trashed()
+                ? 'Este repositorio ya pertenece a un proyecto en la papelera. Restáurelo en lugar de crear otro.'
+                : 'Este repositorio ya está registrado para esta URL de Gitea y propietario.';
+        }
+        if ($errors !== []) {
+            throw ValidationException::withMessages($errors);
+        }
     }
 
     public function sshRepository(Request $request, Project $project, ProjectTagSyncService $tagSync): RedirectResponse
@@ -777,18 +874,30 @@ class PanelController extends Controller
         return back()->with('success', $active ? 'Proyecto activado.' : 'Proyecto desactivado.');
     }
 
-    public function destroyProject(Project $project)
+    public function destroyProject(Project $project): RedirectResponse
     {
         DB::transaction(function () use ($project) {
             $project = Project::whereKey($project->id)->lockForUpdate()->firstOrFail();
-            if ($project->deployments()->exists()) {
-                throw ValidationException::withMessages(['project' => 'El proyecto tiene historial de despliegues; desactívelo en lugar de eliminarlo.']);
+            $hasActiveDeployments = $project->deployments()
+                ->whereHas('targets', fn (Builder $targets): Builder => $targets->whereIn('status', ['pending', 'running']))
+                ->exists();
+            if ($hasActiveDeployments) {
+                throw ValidationException::withMessages(['project' => 'El proyecto tiene despliegues pendientes o en ejecución; cancélelos antes de enviarlo a la papelera.']);
             }
-            $project->servers()->detach();
             $project->delete();
         }, 3);
 
-        return back()->with('success', 'Proyecto eliminado.');
+        return back()->with('success', 'Proyecto movido a la papelera. Puedes restaurarlo cuando quieras.');
+    }
+
+    public function restoreProject(Project $project): RedirectResponse
+    {
+        DB::transaction(function () use ($project): void {
+            $project = Project::onlyTrashed()->whereKey($project->id)->lockForUpdate()->firstOrFail();
+            $project->restore();
+        }, 3);
+
+        return back()->with('success', 'Proyecto restaurado.');
     }
 
     public function removeAssignment(Project $project, Server $server)

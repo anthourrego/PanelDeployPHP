@@ -44,6 +44,7 @@ Route::middleware(['auth', EnsureActiveUser::class])->group(function () {
     });
     Route::get('/servidores/descargas/windows/{package}', [PanelController::class, 'downloadWindowsAgent'])->name('servers.agent.download');
     Route::post('/projects', [PanelController::class, 'project'])->name('projects.store');
+    Route::patch('/projects/{project}', [PanelController::class, 'updateProject'])->name('projects.update');
     Route::post('/projects/{project}/ssh', [PanelController::class, 'sshRepository'])->name('projects.ssh');
     Route::get('/projects/{project}/references', [PanelController::class, 'projectReferences'])
         ->middleware('throttle:20,1,project-references:')
@@ -61,6 +62,7 @@ Route::middleware(['auth', EnsureActiveUser::class])->group(function () {
     Route::delete('/servers/{server}', [PanelController::class, 'destroyServer'])->name('servers.destroy');
     Route::post('/projects/{project}/active', [PanelController::class, 'toggleProject'])->name('projects.active');
     Route::delete('/projects/{project}', [PanelController::class, 'destroyProject'])->name('projects.destroy');
+    Route::patch('/projects/{project}/restore', [PanelController::class, 'restoreProject'])->withTrashed()->name('projects.restore');
     Route::delete('/projects/{project}/servers/{server}', [PanelController::class, 'removeAssignment'])->name('assignments.destroy');
     Route::post('/deployments/{deployment}/cancel', [PanelController::class, 'cancelDeployment'])->name('deployments.cancel');
     Route::delete('/deployments/{deployment}', [PanelController::class, 'destroyDeployment'])->name('deployments.destroy');

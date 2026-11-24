@@ -8,6 +8,7 @@ use App\Models\DeploymentTarget;
 use App\Models\Project;
 use App\Models\Server;
 use App\Models\User;
+use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request as ClientRequest;
 use Illuminate\Support\Collection;
@@ -76,7 +77,7 @@ class PanelTest extends TestCase
     {
         $user = User::factory()->create();
         $project = $this->makeProject();
-        $otherProject = $this->makeProject();
+        $otherProject = $this->makeProject(['name' => 'Otro proyecto', 'repository' => 'other']);
         $first = Server::create(['name' => 'Primero']);
         $second = Server::create(['name' => 'Segundo']);
         $record = function (Project $owner, string $date, array $statuses) use ($user): Deployment {
@@ -698,6 +699,134 @@ class PanelTest extends TestCase
         $this->assertSame(['uploads', 'application/config/database.php'], Project::firstOrFail()->preserved_paths);
     }
 
+    public function test_project_creation_rejects_duplicate_name_and_repository_including_trashed_projects(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake();
+        $project = $this->makeProject();
+        $user = User::factory()->create();
+        $data = ['name' => 'Proyecto', 'gitea_url' => 'https://gitea.test/', 'owner' => 'team', 'repository' => 'app'];
+
+        $this->actingAs($user)->post('/projects', $data)->assertSessionHasErrors([
+            'name' => 'Ya existe un proyecto con este nombre.',
+            'repository' => 'Este repositorio ya está registrado para esta URL de Gitea y propietario.',
+        ]);
+        $this->post('/projects', [...$data, 'repository' => 'other'])->assertSessionHasErrors('name');
+        $this->post('/projects', [...$data, 'name' => 'Otro proyecto'])->assertSessionHasErrors('repository');
+
+        $project->delete();
+        $this->post('/projects', $data)->assertSessionHasErrors([
+            'name' => 'Ya existe un proyecto con este nombre en la papelera. Restáurelo en lugar de crear otro.',
+            'repository' => 'Este repositorio ya pertenece a un proyecto en la papelera. Restáurelo en lugar de crear otro.',
+        ]);
+
+        $this->assertDatabaseCount('projects', 1);
+        Http::assertNothingSent();
+    }
+
+    public function test_project_edit_allows_unchanged_identity_but_rejects_conflicts(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake();
+        $project = $this->makeProject();
+        $other = $this->makeProject(['name' => 'Otro proyecto', 'repository' => 'other']);
+        $data = ['name' => 'Proyecto', 'gitea_url' => 'https://gitea.test', 'owner' => 'team', 'repository' => 'app'];
+        $this->actingAs(User::factory()->create());
+
+        $this->patch("/projects/{$project->id}", $data)->assertSessionHasNoErrors();
+        $this->patch("/projects/{$project->id}", [...$data, 'name' => $other->name])->assertSessionHasErrors('name');
+        $this->patch("/projects/{$project->id}", [...$data, 'repository' => $other->repository])->assertSessionHasErrors('repository');
+
+        $other->delete();
+        $this->patch("/projects/{$project->id}", [...$data, 'name' => $other->name])->assertSessionHasErrors([
+            'name' => 'Ya existe un proyecto con este nombre en la papelera. Restáurelo en lugar de crear otro.',
+        ]);
+        $this->patch("/projects/{$project->id}", [...$data, 'repository' => $other->repository])->assertSessionHasErrors([
+            'repository' => 'Este repositorio ya pertenece a un proyecto en la papelera. Restáurelo en lugar de crear otro.',
+        ]);
+
+        $this->assertDatabaseHas('projects', ['id' => $project->id, 'name' => 'Proyecto', 'repository' => 'app']);
+        Http::assertNothingSent();
+    }
+
+    public function test_project_identity_is_enforced_by_the_database_including_trashed_projects(): void
+    {
+        $project = $this->makeProject();
+        $project->delete();
+
+        $this->assertThrows(
+            fn () => $this->makeProject(['repository' => 'different']),
+            UniqueConstraintViolationException::class,
+        );
+        $this->assertThrows(
+            fn () => $this->makeProject(['name' => 'Otro proyecto']),
+            UniqueConstraintViolationException::class,
+        );
+    }
+
+    public function test_project_can_use_the_same_repository_name_on_another_gitea_server(): void
+    {
+        Http::preventStrayRequests();
+        Http::fake(['https://other.test/api/v1/repos/team/app/tags*' => Http::response([])]);
+        $this->makeProject();
+
+        $this->actingAs(User::factory()->create())->post('/projects', [
+            'name' => 'Otro proyecto',
+            'gitea_url' => 'https://other.test/',
+            'owner' => 'team',
+            'repository' => 'app',
+        ])->assertSessionHasNoErrors();
+
+        $this->assertDatabaseHas('projects', ['name' => 'Otro proyecto', 'gitea_url' => 'https://other.test', 'repository' => 'app']);
+        Http::assertSentCount(1);
+    }
+
+    public function test_project_can_be_edited_without_exposing_or_clearing_its_saved_token(): void
+    {
+        Http::fake();
+        $user = User::factory()->create();
+        $project = Project::create([
+            'name' => 'Proyecto',
+            'gitea_url' => 'https://gitea.test',
+            'owner' => 'team',
+            'repository' => 'app',
+            'gitea_token' => 'saved-secret',
+            'preserved_paths' => ['uploads'],
+        ]);
+        $data = [
+            'name' => 'Proyecto editado',
+            'gitea_url' => 'https://gitea.test',
+            'owner' => 'team',
+            'repository' => 'app',
+            'ssh_url' => '',
+            'gitea_token' => '',
+            'preserved_paths' => "uploads\nstorage",
+        ];
+
+        $this->actingAs($user)->patch("/projects/{$project->id}", [...$data, 'gitea_url' => 'http://gitea.test'])
+            ->assertSessionHasErrors(['gitea_token' => 'Un token de Gitea requiere HTTPS.']);
+        $this->assertSame('https://gitea.test', $project->fresh()->gitea_url);
+        $this->assertSame('saved-secret', $project->fresh()->gitea_token);
+        Http::assertNothingSent();
+
+        $this->actingAs($user)->patch("/projects/{$project->id}", $data)
+            ->assertSessionHasNoErrors()
+            ->assertSessionHas('success', 'Proyecto actualizado.');
+        Http::assertNothingSent();
+        $this->assertSame('saved-secret', $project->fresh()->gitea_token);
+        $this->assertSame(['uploads', 'storage'], $project->fresh()->preserved_paths);
+
+        $this->patch("/projects/{$project->id}", [...$data, 'gitea_token' => 'replacement-secret'])->assertSessionHasNoErrors();
+
+        $this->assertSame('replacement-secret', $project->fresh()->gitea_token);
+        Http::assertSent(fn (ClientRequest $request): bool => $request->hasHeader('Authorization', 'token replacement-secret'));
+        $this->get('/proyectos')->assertInertia(fn (Assert $page) => $page
+            ->where('projects.0.name', 'Proyecto editado')
+            ->where('projects.0.gitea_url', 'https://gitea.test')
+            ->where('projects.0.has_gitea_token', true)
+            ->missing('projects.0.gitea_token'));
+    }
+
     public function test_project_creation_syncs_the_highest_semver_tag_across_gitea_pages(): void
     {
         $firstPage = [
@@ -770,8 +899,8 @@ class PanelTest extends TestCase
                 ['name' => 'v3.0.0', 'commit' => ['sha' => str_repeat('f', 40)]],
             ]),
         ]);
-        $broken = $this->makeProject();
-        $broken->forceFill(['repository' => 'broken', 'latest_tag' => 'v1.0.0'])->save();
+        $broken = $this->makeProject(['name' => 'Proyecto roto', 'repository' => 'broken']);
+        $broken->forceFill(['latest_tag' => 'v1.0.0'])->save();
         $project = $this->makeProject();
         $project->update(['is_active' => false]);
 
@@ -791,8 +920,7 @@ class PanelTest extends TestCase
         Http::preventStrayRequests();
         Http::fake(['https://gitea.test/api/v1/repos/team/*/tags*' => Http::response([])]);
         $this->makeProject();
-        $second = $this->makeProject();
-        $second->update(['repository' => 'other']);
+        $second = $this->makeProject(['name' => 'Otro proyecto', 'repository' => 'other']);
 
         $this->actingAs(User::factory()->create())
             ->post(route('projects.tags.sync-all'))
@@ -1059,7 +1187,7 @@ class PanelTest extends TestCase
     {
         $user = User::factory()->create();
         $project = $this->makeProject();
-        $otherProject = $this->makeProject();
+        $otherProject = $this->makeProject(['name' => 'Otro proyecto', 'repository' => 'other']);
         $first = Server::create(['name' => 'Primero']);
         $second = Server::create(['name' => 'Segundo']);
         $third = Server::create(['name' => 'Tercero']);
@@ -1153,7 +1281,7 @@ class PanelTest extends TestCase
         $record($servers['Incierto'], 'refs/tags/v2.0.0', str_repeat('e', 40), 'succeeded', '2026-11-20 16:00:00');
         $record($servers['Incierto'], 'refs/tags/v2.0.0', str_repeat('f', 40), 'uncertain', '2026-11-20 17:00:00');
 
-        $failedSyncProject = $this->makeProject();
+        $failedSyncProject = $this->makeProject(['name' => 'Proyecto roto', 'repository' => 'broken']);
         $failedSyncProject->forceFill([
             'latest_tag' => 'v3.0.0',
             'latest_tag_commit' => str_repeat('a', 40),
@@ -1239,9 +1367,9 @@ class PanelTest extends TestCase
         ])->assertSessionHasNoErrors();
     }
 
-    private function makeProject(): Project
+    private function makeProject(array $attributes = []): Project
     {
-        return Project::create(['name' => 'Proyecto', 'gitea_url' => 'https://gitea.test', 'owner' => 'team', 'repository' => 'app', 'preserved_paths' => []]);
+        return Project::create([...['name' => 'Proyecto', 'gitea_url' => 'https://gitea.test', 'owner' => 'team', 'repository' => 'app', 'preserved_paths' => []], ...$attributes]);
     }
 
     public function test_inactive_server_or_project_cannot_be_scheduled(): void
@@ -1261,7 +1389,7 @@ class PanelTest extends TestCase
         $this->assertDatabaseCount('deployments', 0);
     }
 
-    public function test_server_and_project_with_history_cannot_be_deleted_but_unused_ones_can(): void
+    public function test_server_with_history_cannot_be_deleted_and_project_history_can_be_trashed_and_restored_after_active_work_finishes(): void
     {
         $user = User::factory()->create();
         $project = $this->makeProject();
@@ -1269,8 +1397,47 @@ class PanelTest extends TestCase
         $this->scheduledDeployment($user, $project, $server);
 
         $this->delete("/servers/{$server->id}")->assertSessionHasErrors('server');
-        $this->delete("/projects/{$project->id}")->assertSessionHasErrors('project');
+        $this->delete("/projects/{$project->id}")->assertSessionHasErrors([
+            'project' => 'El proyecto tiene despliegues pendientes o en ejecución; cancélelos antes de enviarlo a la papelera.',
+        ]);
+        $this->assertNotSoftDeleted($project);
         $this->assertDatabaseHas('servers', ['id' => $server->id]);
+
+        $this->post('/deployments/'.Deployment::firstOrFail()->id.'/cancel')->assertSessionHasNoErrors();
+        $target = DeploymentTarget::firstOrFail();
+        $target->status = 'running';
+        $target->save();
+        $server->update(['active_target_id' => $target->id]);
+        $this->delete("/projects/{$project->id}")->assertSessionHasErrors([
+            'project' => 'El proyecto tiene despliegues pendientes o en ejecución; cancélelos antes de enviarlo a la papelera.',
+        ]);
+        $this->assertNotSoftDeleted($project);
+        $this->assertDatabaseHas('deployment_targets', ['status' => 'running']);
+
+        $target->status = 'cancelled';
+        $target->save();
+        $server->update(['active_target_id' => null]);
+        $this->delete("/projects/{$project->id}")->assertSessionHasNoErrors();
+
+        $this->assertSoftDeleted($project);
+        $this->assertDatabaseHas('deployments', ['project_id' => $project->id]);
+        $this->get('/proyectos')->assertInertia(fn (Assert $page) => $page
+            ->has('projects', 0)
+            ->where('trashedProjects.0.id', $project->id));
+        $this->get('/programaciones')->assertInertia(fn (Assert $page) => $page
+            ->where('deployments.0.project_name', $project->name));
+
+        $this->patch("/projects/{$project->id}/restore")->assertSessionHasNoErrors();
+
+        $this->assertNotSoftDeleted(Project::withTrashed()->findOrFail($project->id));
+        $this->assertDatabaseHas('project_server', [
+            'project_id' => $project->id,
+            'server_id' => $server->id,
+            'path' => 'C:\\app',
+        ]);
+        $this->get('/proyectos')->assertInertia(fn (Assert $page) => $page
+            ->where('projects.0.id', $project->id)
+            ->has('trashedProjects', 0));
 
         $unused = Server::create(['name' => 'Libre']);
         $unusedProject = Project::create(['name' => 'Libre', 'gitea_url' => 'https://gitea.test', 'owner' => 'team', 'repository' => 'x', 'preserved_paths' => []]);
@@ -1278,7 +1445,7 @@ class PanelTest extends TestCase
         $this->delete("/projects/{$unusedProject->id}")->assertSessionHasNoErrors();
         $this->delete("/servers/{$unused->id}")->assertSessionHasNoErrors();
         $this->assertDatabaseMissing('servers', ['id' => $unused->id]);
-        $this->assertDatabaseMissing('projects', ['id' => $unusedProject->id]);
+        $this->assertSoftDeleted($unusedProject);
     }
 
     public function test_cancelled_deployment_can_be_deleted_and_frees_the_commit(): void

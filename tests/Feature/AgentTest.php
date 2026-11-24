@@ -26,11 +26,12 @@ class AgentTest extends TestCase
 
     private function target(Server $server, bool $future = false): DeploymentTarget
     {
-        $project = Project::create(['name' => 'Proyecto', 'gitea_url' => 'https://gitea.test', 'owner' => 'team', 'repository' => 'app', 'preserved_paths' => ['uploads']]);
+        $number = Project::count() + 1;
+        $project = Project::create(['name' => "Proyecto {$number}", 'gitea_url' => 'https://gitea.test', 'owner' => 'team', 'repository' => "app-{$number}", 'preserved_paths' => ['uploads']]);
         $deployment = Deployment::create([
             'project_id' => $project->id, 'user_id' => User::factory()->create()->id, 'ref' => 'main',
             'commit' => str_repeat('b', 40), 'scheduled_at' => $future ? now()->addDay() : now()->subDay(),
-            'repository_url' => 'https://gitea.test/team/app.git',
+            'repository_url' => "https://gitea.test/team/app-{$number}.git",
         ]);
 
         $target = $deployment->targets()->create(['server_id' => $server->id, 'path' => 'C:\\app', 'preserved_paths' => ['uploads']]);
@@ -63,7 +64,7 @@ class AgentTest extends TestCase
         $headers = $this->headers($server);
         $this->postJson('https://localhost/api/agent/claim', [], $headers)
             ->assertOk()->assertJsonPath('state', 'claimed')->assertJsonPath('target_id', $target->id)
-            ->assertJsonPath('commit', str_repeat('b', 40))->assertJsonPath('repository_url', 'https://gitea.test/team/app.git')
+            ->assertJsonPath('commit', str_repeat('b', 40))->assertJsonPath('repository_url', 'https://gitea.test/team/app-3.git')
             ->assertJsonPath('preserved_paths.0', 'uploads');
         $this->postJson('https://localhost/api/agent/claim', [], $headers)->assertOk()->assertJsonPath('state', 'busy');
         $this->assertSame('pending', $future->fresh()->status);

@@ -14,12 +14,12 @@ function Actions({ disabled, onClose, processing, submitLabel }) {
     );
 }
 
-function useModalForm(initial, url, onClose, resetFields) {
+function useModalForm(initial, url, onClose, resetFields, method = 'post') {
     const form = useForm(initial);
 
     function submit(event) {
         event.preventDefault();
-        form.post(url, {
+        form[method](url, {
             onSuccess: () => {
                 form.reset(...resetFields);
                 onClose();
@@ -65,13 +65,19 @@ export function PasswordModal({ onClose, updateUrl }) {
     );
 }
 
-export function ProjectModal({ onClose }) {
+export function ProjectModal({ onClose, project = null }) {
     const { form, submit } = useModalForm({
-        name: '', gitea_url: '', owner: '', repository: '', ssh_url: '', gitea_token: '', preserved_paths: '',
-    }, '/projects', onClose, []);
+        name: project?.name ?? '',
+        gitea_url: project?.gitea_url ?? '',
+        owner: project?.owner ?? '',
+        repository: project?.repository ?? '',
+        ssh_url: project?.ssh_url ?? '',
+        gitea_token: '',
+        preserved_paths: project?.preserved_paths?.join('\n') ?? '',
+    }, project ? `/projects/${project.id}` : '/projects', onClose, [], project ? 'patch' : 'post');
 
     return (
-        <Modal onClose={onClose} title="Registrar proyecto">
+        <Modal onClose={onClose} title={project ? 'Editar proyecto' : 'Registrar proyecto'}>
             <form className="space-y-4" onSubmit={submit}>
                 <Field error={form.errors.name} label="Nombre"><Bind form={form} name="name" required /></Field>
                 <Field error={form.errors.gitea_url} label="URL base de Gitea"><Bind form={form} name="gitea_url" placeholder="http://192.168.0.214:3000" required type="url" /></Field>
@@ -84,13 +90,14 @@ export function ProjectModal({ onClose }) {
                     <Hint>Con SSH, el panel consulta versiones usando su propia clave; Gitea no necesita HTTPS.</Hint>
                 </Field>
                 <Field error={form.errors.gitea_token} label="Token de Gitea (opcional, solo HTTPS)">
-                    <Bind autoComplete="new-password" form={form} name="gitea_token" type="password" />
+                    <Bind autoComplete="new-password" form={form} name="gitea_token" placeholder={project?.has_gitea_token ? 'Dejar en blanco para conservarlo' : undefined} type="password" />
+                    {project?.has_gitea_token && <Hint>Ingresa un token nuevo para reemplazar el actual. El token guardado nunca se muestra.</Hint>}
                 </Field>
                 <Field error={form.errors.preserved_paths} label="Rutas relativas a preservar, una por línea">
                     <textarea className={inputClassName} onChange={(event) => form.setData('preserved_paths', event.target.value)} placeholder={'application/config/database.php\nuploads'} rows={3} value={form.data.preserved_paths} />
                     <Hint>El agente bloqueará commits que cambien rutas protegidas o encuentre cambios locales fuera de ellas.</Hint>
                 </Field>
-                <Actions onClose={onClose} processing={form.processing} submitLabel="Registrar proyecto" />
+                <Actions onClose={onClose} processing={form.processing} submitLabel={project ? 'Guardar cambios' : 'Registrar proyecto'} />
             </form>
         </Modal>
     );

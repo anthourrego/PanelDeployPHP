@@ -422,7 +422,46 @@ function ServersList({ servers, showActions = false }) {
     );
 }
 
-function ProjectsGrid({ onAssign, onScheduleUpdate, onSsh, projects, syncAllUrl }) {
+function DeletedProjects({ projects }) {
+    if (projects.length === 0) {
+        return null;
+    }
+
+    return (
+        <section aria-labelledby="deleted-projects-heading" className="overflow-hidden rounded-2xl bg-white/90 shadow-sm ring-1 ring-slate-300 dark:bg-slate-900 dark:ring-slate-700">
+            <div className="flex items-center justify-between gap-3 border-b border-slate-200 px-4 py-4 dark:border-slate-700">
+                <div>
+                    <h2 className="font-display text-base font-bold text-neutral-800 dark:text-slate-100" id="deleted-projects-heading">Papelera</h2>
+                    <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">El historial y las rutas se conservan; puedes restaurar estos proyectos.</p>
+                </div>
+                <Badge>{projects.length}</Badge>
+            </div>
+            <ul className="divide-y divide-slate-200 dark:divide-slate-700">
+                {projects.map((project) => (
+                    <li className="flex flex-wrap items-center justify-between gap-3 px-4 py-3" key={project.id}>
+                        <div className="min-w-0">
+                            <p className="break-words text-sm font-semibold text-slate-800 dark:text-slate-100">{project.name}</p>
+                            <p className="break-all font-mono text-xs text-slate-500 dark:text-slate-400">{project.owner}/{project.repository}</p>
+                        </div>
+                        <button
+                            className={`${secondaryButton} px-3! py-1.5! text-xs!`}
+                            onClick={() => runAction('patch', `/projects/${project.id}/restore`, {
+                                title: '¿Restaurar el proyecto?',
+                                text: 'Volverá a aparecer con su configuración, rutas y estado anteriores.',
+                                confirmText: 'Sí, restaurar',
+                            })}
+                            type="button"
+                        >
+                            <Icon className="size-3.5" name="refresh" />Restaurar
+                        </button>
+                    </li>
+                ))}
+            </ul>
+        </section>
+    );
+}
+
+function ProjectsGrid({ onAssign, onEdit, onScheduleUpdate, onSsh, projects, syncAllUrl, trashedProjects }) {
     const [syncing, setSyncing] = useState(null);
     const [selectedProjectId, setSelectedProjectId] = useState(projects[0]?.id ?? null);
 
@@ -435,7 +474,12 @@ function ProjectsGrid({ onAssign, onScheduleUpdate, onSsh, projects, syncAllUrl 
     }
 
     if (projects.length === 0) {
-        return <div className="rounded-2xl bg-white dark:bg-slate-900 shadow-sm ring-1 ring-slate-200 dark:ring-slate-700"><EmptyState>No hay proyectos registrados.</EmptyState></div>;
+        return (
+            <div className="space-y-5">
+                <div className="rounded-2xl bg-white dark:bg-slate-900 shadow-sm ring-1 ring-slate-200 dark:ring-slate-700"><EmptyState>No hay proyectos registrados.</EmptyState></div>
+                <DeletedProjects projects={trashedProjects} />
+            </div>
+        );
     }
 
     const project = projects.find((listedProject) => listedProject.id === selectedProjectId) ?? projects[0];
@@ -644,6 +688,7 @@ function ProjectsGrid({ onAssign, onScheduleUpdate, onSsh, projects, syncAllUrl 
                     <div className="mt-4 flex flex-wrap gap-2 border-t border-slate-100 dark:border-slate-800 pt-4">
                         <button className={secondaryButton} onClick={() => onAssign(project.id)} type="button"><Icon className="size-4" name="plus" />Asignar ruta</button>
                         <button className={secondaryButton} onClick={() => onSsh(project)} type="button"><Icon className="size-4" name="link" />Conexión SSH</button>
+                        <button className={secondaryButton} onClick={() => onEdit(project)} type="button"><Icon className="size-4" name="edit" />Editar</button>
                         <button
                             className={secondaryButton}
                             onClick={() => runAction('post', `/projects/${project.id}/active`, {
@@ -657,23 +702,25 @@ function ProjectsGrid({ onAssign, onScheduleUpdate, onSsh, projects, syncAllUrl 
                         >
                             <Icon className="size-4" name="power" />{project.is_active ? 'Desactivar' : 'Activar'}
                         </button>
-                        {!project.has_deployments && (
-                            <button
-                                className={`${dangerButton} py-2 text-sm`}
-                                onClick={() => runAction('delete', `/projects/${project.id}`, {
-                                    title: '¿Eliminar el proyecto?',
-                                    text: `Se eliminará "${project.name}" y sus rutas. Esta acción no se puede deshacer.`,
-                                    confirmText: 'Sí, eliminar',
-                                    danger: true,
-                                })}
-                                type="button"
-                            >
-                                <Icon className="size-4" name="trash" />Eliminar
-                            </button>
-                        )}
+                        <button
+                            className={`${dangerButton} py-2 text-sm disabled:cursor-not-allowed`}
+                            disabled={project.has_active_deployments}
+                            onClick={() => runAction('delete', `/projects/${project.id}`, {
+                                title: '¿Enviar el proyecto a la papelera?',
+                                text: `Se ocultará "${project.name}". Se conservarán su historial y sus rutas, y podrás restaurarlo desde la papelera.`,
+                                confirmText: 'Sí, enviar a papelera',
+                                danger: true,
+                            })}
+                            title={project.has_active_deployments ? 'Cancela los despliegues pendientes o en ejecución antes de eliminar el proyecto.' : undefined}
+                            type="button"
+                        >
+                            <Icon className="size-4" name="trash" />Eliminar
+                        </button>
                     </div>
+                    {project.has_active_deployments && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">Cancela los despliegues pendientes o en ejecución antes de enviar este proyecto a la papelera.</p>}
                 </article>
             </div>
+            <DeletedProjects projects={trashedProjects} />
         </div>
     );
 }
@@ -859,7 +906,7 @@ function UsersManagement({ users }) {
     );
 }
 
-export default function Panel({ agentDownloads, appVersion, canManageUsers = false, deploymentFilters, deploymentHistory, deployments, deploymentTimezone, passwordUpdateUrl, profileUpdateUrl, projects, projectTagsSyncAllUrl, section, sectionUrls, servers, user, users = [] }) {
+export default function Panel({ agentDownloads, appVersion, canManageUsers = false, deploymentFilters, deploymentHistory, deployments, deploymentTimezone, passwordUpdateUrl, profileUpdateUrl, projects, projectTagsSyncAllUrl, section, sectionUrls, servers, trashedProjects = [], user, users = [] }) {
     const [modal, setModal] = useState(null);
     const [tokenReveal, setTokenReveal] = useState(null);
     const [menuOpen, setMenuOpen] = useState(false);
@@ -1034,6 +1081,7 @@ export default function Panel({ agentDownloads, appVersion, canManageUsers = fal
                         {section === 'projects' && (
                             <ProjectsGrid
                                 onAssign={(projectId) => setModal({ type: 'assignment', projectId })}
+                                onEdit={(project) => setModal({ type: 'project', project })}
                                 onScheduleUpdate={(projectId, version, serverIds) => setModal({
                                     type: 'deployment',
                                     projectId,
@@ -1043,6 +1091,7 @@ export default function Panel({ agentDownloads, appVersion, canManageUsers = fal
                                 onSsh={(project) => setModal({ type: 'ssh', project })}
                                 projects={projects}
                                 syncAllUrl={projectTagsSyncAllUrl}
+                                trashedProjects={trashedProjects}
                             />
                         )}
 
@@ -1068,7 +1117,7 @@ export default function Panel({ agentDownloads, appVersion, canManageUsers = fal
                 </Modal>
             )}
             {modal?.type === 'deployment' && <DeploymentModal initialProjectId={modal.projectId ?? ''} initialRef={modal.ref ?? ''} initialServerIds={modal.serverIds ?? []} onClose={closeModal} projects={projects.filter((project) => project.is_active)} servers={servers.filter((server) => server.is_active)} timezone={deploymentTimezone} />}
-            {modal?.type === 'project' && <ProjectModal onClose={closeModal} />}
+            {modal?.type === 'project' && <ProjectModal onClose={closeModal} project={modal.project} />}
             {modal?.type === 'server' && <ServerModal onClose={closeModal} />}
             {modal?.type === 'assignment' && <AssignmentModal initialProjectId={modal.projectId} onClose={closeModal} projects={projects} servers={servers} />}
             {modal?.type === 'ssh' && <SshModal onClose={closeModal} project={modal.project} />}
