@@ -6,6 +6,8 @@ Panel Laravel y agente Windows para programar un commit de Gitea en repositorios
 
 El resumen abre en `/`. También puede acceder directamente a `/programaciones`, `/proyectos`, `/servidores` y `/descargas`; al recargar se conserva la sección indicada por la URL.
 
+En **Programaciones** puede filtrar todo el historial por proyecto, servidor, estado y rango de fechas programadas. Las fechas incluyen los días completos en UTC. Al combinar servidor y estado, ambos deben corresponder al mismo trabajo; se siguen mostrando todos los servidores de cada programación encontrada. Los resultados se muestran en páginas de 20 y los filtros se conservan al navegar entre ellas.
+
 La versión del panel aparece en el menú lateral y se define en `config/app.php`, en la clave `version`. Actualícela en cada lanzamiento y, si usa caché de configuración, regenérela al publicar. Es independiente de Git, Gitea y de la versión del agente Windows.
 
 Use el botón de sol o luna en la cabecera del panel o en el inicio de sesión para cambiar entre tema claro y oscuro. La preferencia se guarda en el navegador; el tema inicial es claro.

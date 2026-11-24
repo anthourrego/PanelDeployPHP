@@ -12,6 +12,7 @@ use App\Services\ProjectTagSyncService;
 use App\Services\SshRepository;
 use App\Services\WindowsAgentDownloads;
 use Carbon\CarbonImmutable;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\UniqueConstraintViolationException;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\Client\RequestException;
@@ -36,6 +37,52 @@ class PanelController extends Controller
     public function index(Request $request, string $section, WindowsAgentDownloads $agentDownloads, ProjectTagSyncService $tagSync): Response
     {
         $serverVersions = $section === 'projects' ? $this->projectServerVersions() : collect();
+        $filters = $section === 'deployments' ? $request->validate([
+            'project_id' => ['nullable', 'integer', 'min:1'],
+            'server_id' => ['nullable', 'integer', 'min:1'],
+            'status' => ['nullable', 'string', Rule::in(['pending', 'running', 'succeeded', 'failed', 'uncertain', 'cancelled'])],
+            'date_from' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:1753-01-01', 'before:9999-12-31'],
+            'date_to' => ['nullable', 'date_format:Y-m-d', 'after_or_equal:1753-01-01', 'before:9999-12-31', ...($request->filled('date_from') ? ['after_or_equal:date_from'] : [])],
+        ], [
+            'date_from.after_or_equal' => 'La fecha desde debe ser igual o posterior al 1753-01-01.',
+            'date_from.before' => 'La fecha desde debe ser igual o anterior al 9999-12-30.',
+            'date_to.after_or_equal' => 'La fecha hasta debe ser igual o posterior al 1753-01-01 y a la fecha desde.',
+            'date_to.before' => 'La fecha hasta debe ser igual o anterior al 9999-12-30.',
+        ], [
+            'project_id' => 'proyecto',
+            'server_id' => 'servidor',
+            'status' => 'estado',
+            'date_from' => 'fecha desde',
+            'date_to' => 'fecha hasta',
+        ]) : [];
+
+        $history = null;
+        if ($section === 'deployments') {
+            $query = Deployment::with(['project', 'targets.server'])->latest('id');
+
+            if (! empty($filters['project_id'])) {
+                $query->where('project_id', $filters['project_id']);
+            }
+            if (! empty($filters['server_id']) || ! empty($filters['status'])) {
+                $query->whereHas('targets', function (Builder $targets) use ($filters): void {
+                    if (! empty($filters['server_id'])) {
+                        $targets->where('server_id', $filters['server_id']);
+                    }
+                    if (! empty($filters['status'])) {
+                        $targets->where('status', $filters['status']);
+                    }
+                });
+            }
+            if (! empty($filters['date_from'])) {
+                $query->where('scheduled_at', '>=', $filters['date_from'].' 00:00:00');
+            }
+            if (! empty($filters['date_to'])) {
+                $end = CarbonImmutable::createFromFormat('!Y-m-d', $filters['date_to'], 'UTC')->addDay();
+                $query->where('scheduled_at', '<', $end->format('Y-m-d H:i:s'));
+            }
+
+            $history = $query->paginate(20)->appends($filters)->through(fn (Deployment $deployment): array => $this->serializeDeployment($deployment));
+        }
 
         return Inertia::render('Panel', [
             'user' => $request->user()->only(['name', 'username', 'email']),
@@ -120,21 +167,28 @@ class PanelController extends Controller
                 'has_token' => $server->agent_token_hash !== null,
                 'has_history' => $server->targets()->exists(),
             ]),
-            'deployments' => Deployment::with(['project', 'targets.server'])->latest('id')->limit(100)->get()->map(fn (Deployment $deployment): array => [
-                'id' => $deployment->id,
-                'can_delete' => $deployment->targets->every(fn (DeploymentTarget $target): bool => $target->status === 'cancelled'),
-                'project_name' => $deployment->project->name,
-                'ref' => $deployment->ref,
-                'commit' => $deployment->commit,
-                'scheduled_at' => $deployment->scheduled_at->format('Y-m-d H:i'),
-                'targets' => $deployment->targets->map(fn (DeploymentTarget $target): array => [
-                    'id' => $target->id,
-                    'server_name' => $target->server->name,
-                    'status' => $target->status,
-                    'result' => $target->result,
-                ])->values(),
-            ]),
+            'deployments' => Deployment::with(['project', 'targets.server'])->latest('id')->limit(100)->get()->map(fn (Deployment $deployment): array => $this->serializeDeployment($deployment)),
+            'deploymentFilters' => $filters,
+            'deploymentHistory' => $history,
         ]);
+    }
+
+    private function serializeDeployment(Deployment $deployment): array
+    {
+        return [
+            'id' => $deployment->id,
+            'can_delete' => $deployment->targets->every(fn (DeploymentTarget $target): bool => $target->status === 'cancelled'),
+            'project_name' => $deployment->project->name,
+            'ref' => $deployment->ref,
+            'commit' => $deployment->commit,
+            'scheduled_at' => $deployment->scheduled_at->format('Y-m-d H:i'),
+            'targets' => $deployment->targets->map(fn (DeploymentTarget $target): array => [
+                'id' => $target->id,
+                'server_name' => $target->server->name,
+                'status' => $target->status,
+                'result' => $target->result,
+            ])->values(),
+        ];
     }
 
     /**

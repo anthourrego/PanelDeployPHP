@@ -72,6 +72,138 @@ class PanelTest extends TestCase
         }
     }
 
+    public function test_deployment_history_filters_by_project_target_and_inclusive_utc_dates(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->makeProject();
+        $otherProject = $this->makeProject();
+        $first = Server::create(['name' => 'Primero']);
+        $second = Server::create(['name' => 'Segundo']);
+        $record = function (Project $owner, string $date, array $statuses) use ($user): Deployment {
+            $deployment = $owner->deployments()->create([
+                'user_id' => $user->id,
+                'ref' => 'main',
+                'commit' => str_repeat('a', 40),
+                'scheduled_at' => $date,
+            ]);
+            foreach ($statuses as $serverId => $status) {
+                $deployment->targets()->create([
+                    'server_id' => $serverId,
+                    'path' => 'C:\\app',
+                    'preserved_paths' => [],
+                ])->forceFill(['status' => $status])->save();
+            }
+
+            return $deployment;
+        };
+        $record($project, '2026-03-01 12:00:00', [$first->id => 'pending', $second->id => 'failed']);
+        $start = $record($project, '2026-03-01 00:00:00', [$first->id => 'failed']);
+        $end = $record($project, '2026-03-02 23:59:59', [$first->id => 'failed', $second->id => 'pending']);
+        $record($otherProject, '2026-03-01 12:00:00', [$first->id => 'failed']);
+        $record($project, '2026-02-28 23:59:59', [$first->id => 'failed']);
+        $record($project, '2026-03-03 00:00:00', [$first->id => 'failed']);
+        $record($project, '2026-03-01 12:00:00', [$first->id => 'pending']);
+
+        $this->actingAs($user)->get('/programaciones?'.http_build_query([
+            'project_id' => $project->id,
+            'server_id' => $first->id,
+            'status' => 'failed',
+            'date_from' => '2026-03-01',
+            'date_to' => '2026-03-02',
+        ]))->assertOk()->assertInertia(fn (Assert $page) => $page
+            ->where('deploymentHistory.total', 2)
+            ->has('deploymentHistory.data', 2)
+            ->where('deploymentHistory.data.0.id', $end->id)
+            ->has('deploymentHistory.data.0.targets', 2)
+            ->where('deploymentHistory.data.0.targets.1.status', 'pending')
+            ->where('deploymentHistory.data.1.id', $start->id));
+
+        $this->get("/programaciones?project_id={$project->id}")->assertInertia(fn (Assert $page) => $page->where('deploymentHistory.total', 6));
+        $this->get("/programaciones?server_id={$second->id}")->assertInertia(fn (Assert $page) => $page->where('deploymentHistory.total', 2));
+        $this->get('/programaciones?status=failed')->assertInertia(fn (Assert $page) => $page->where('deploymentHistory.total', 6));
+        $this->get('/programaciones?date_to=2026-03-01')->assertInertia(fn (Assert $page) => $page->where('deploymentHistory.total', 5));
+        $this->get('/programaciones?date_from=2026-03-03')->assertInertia(fn (Assert $page) => $page->where('deploymentHistory.total', 1));
+    }
+
+    public function test_cancelling_a_filtered_target_returns_to_the_filtered_history(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->makeProject();
+        $server = Server::create(['name' => 'Servidor']);
+        $deployment = $project->deployments()->create([
+            'user_id' => $user->id,
+            'ref' => 'main',
+            'commit' => str_repeat('a', 40),
+            'scheduled_at' => '2026-03-01 00:00:00',
+        ]);
+        $target = $deployment->targets()->create([
+            'server_id' => $server->id,
+            'path' => 'C:\\app',
+            'preserved_paths' => [],
+        ]);
+
+        $this->actingAs($user)->from('/programaciones?status=pending')->post("/targets/{$target->id}/cancel")
+            ->assertRedirect('/programaciones?status=pending')
+            ->assertSessionHasNoErrors();
+
+        $this->assertDatabaseHas('deployment_targets', ['id' => $target->id, 'status' => 'cancelled']);
+        $this->get('/programaciones?status=pending')->assertInertia(fn (Assert $page) => $page->where('deploymentHistory.total', 0));
+        $this->get('/programaciones?status=cancelled')->assertInertia(fn (Assert $page) => $page->where('deploymentHistory.total', 1));
+    }
+
+    public function test_deployment_history_paginates_beyond_the_last_hundred_and_keeps_filters(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->makeProject();
+        $oldest = null;
+        for ($i = 0; $i < 105; $i++) {
+            $deployment = $project->deployments()->create([
+                'user_id' => $user->id,
+                'ref' => 'main',
+                'commit' => str_repeat('a', 40),
+                'scheduled_at' => '2026-03-01 00:00:00',
+            ]);
+            $oldest ??= $deployment;
+        }
+
+        $this->actingAs($user)->get("/programaciones?project_id={$project->id}")->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->where('deploymentHistory.total', 105)
+                ->where('deploymentHistory.last_page', 6)
+                ->has('deploymentHistory.data', 20)
+                ->where('deploymentHistory.next_page_url', fn (string $url): bool => str_contains($url, "project_id={$project->id}") && str_contains($url, 'page=2')));
+
+        $this->get("/programaciones?project_id={$project->id}&page=6")->assertInertia(fn (Assert $page) => $page
+            ->has('deployments', 100)
+            ->where('deploymentHistory.current_page', 6)
+            ->has('deploymentHistory.data', 5)
+            ->where('deploymentHistory.data.4.id', $oldest->id));
+    }
+
+    public function test_deployment_history_rejects_invalid_filters(): void
+    {
+        $this->actingAs(User::factory()->create())->from('/programaciones')
+            ->get('/programaciones?'.http_build_query([
+                'project_id' => 0,
+                'server_id' => ['invalid'],
+                'status' => 'invalid',
+                'date_from' => '2026-03-05',
+                'date_to' => '2026-03-04',
+            ]))->assertRedirect('/programaciones')
+            ->assertSessionHasErrors([
+                'project_id' => 'El campo proyecto debe ser al menos 1.',
+                'server_id' => 'El campo servidor debe ser un número entero.',
+                'status' => 'El valor seleccionado en estado no es válido.',
+                'date_to' => 'La fecha hasta debe ser igual o posterior al 1753-01-01 y a la fecha desde.',
+            ]);
+
+        $this->from('/programaciones')->get('/programaciones?date_from=1752-12-31&date_to=9999-12-31')
+            ->assertSessionHasErrors([
+                'date_from' => 'La fecha desde debe ser igual o posterior al 1753-01-01.',
+                'date_to' => 'La fecha hasta debe ser igual o anterior al 9999-12-30.',
+            ]);
+    }
+
     public function test_panel_exposes_only_the_authenticated_users_profile_fields(): void
     {
         $user = User::factory()->create([

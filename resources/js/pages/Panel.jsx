@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { AssignmentModal, DeploymentModal, PasswordModal, ProjectModal, ServerModal, SshModal, TokenModal, WindowsAgentGuideModal } from '../components/Modals';
 import ThemeToggle from '../components/ThemeToggle';
 import { confirmAction, notifyError, notifySuccess } from '../lib/notify';
-import { Badge, Card, EmptyState, Field, Hint, Icon, Modal, StatusBadge, dangerButton, inputClassName, primaryButton, secondaryButton } from '../components/ui';
+import { Badge, Card, EmptyState, Field, Hint, Icon, Modal, StatusBadge, dangerButton, inputClassName, primaryButton, secondaryButton, targetStatuses } from '../components/ui';
 
 const SIDEBAR_KEY = 'panel.sidebar.collapsed';
 const ONLINE_WINDOW_MS = 5 * 60 * 1000;
@@ -224,11 +224,82 @@ function DeploymentActions({ deployment }) {
     );
 }
 
-function DeploymentsTable({ deployments, limit }) {
+function DeploymentHistory({ filters, history, projects, servers, url }) {
+    const form = useForm({
+        project_id: filters.project_id ?? '',
+        server_id: filters.server_id ?? '',
+        status: filters.status ?? '',
+        date_from: filters.date_from ?? '',
+        date_to: filters.date_to ?? '',
+    });
+    const pageUrl = (page) => {
+        const params = new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== null && value !== ''));
+        params.set('page', page);
+
+        return `${url}?${params.toString()}`;
+    };
+
+    return (
+        <div className="space-y-5">
+            <Card title="Filtrar historial">
+                <form className="space-y-4 p-5" onSubmit={(event) => {
+                    event.preventDefault();
+                    form.get(url, { preserveScroll: true });
+                }}>
+                    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                        <Field error={form.errors.project_id} label="Proyecto">
+                            <select className={inputClassName} onChange={(event) => form.setData('project_id', event.target.value)} value={form.data.project_id}>
+                                <option value="">Todos los proyectos</option>
+                                {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
+                            </select>
+                        </Field>
+                        <Field error={form.errors.server_id} label="Servidor">
+                            <select className={inputClassName} onChange={(event) => form.setData('server_id', event.target.value)} value={form.data.server_id}>
+                                <option value="">Todos los servidores</option>
+                                {servers.map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}
+                            </select>
+                        </Field>
+                        <Field error={form.errors.status} label="Estado del servidor">
+                            <select className={inputClassName} onChange={(event) => form.setData('status', event.target.value)} value={form.data.status}>
+                                <option value="">Todos los estados</option>
+                                {Object.entries(targetStatuses).map(([status, { label }]) => <option key={status} value={status}>{label}</option>)}
+                            </select>
+                        </Field>
+                        <Field error={form.errors.date_from} label="Fecha programada desde (UTC)">
+                            <input className={inputClassName} max="9999-12-30" min="1753-01-01" onChange={(event) => form.setData('date_from', event.target.value)} type="date" value={form.data.date_from} />
+                        </Field>
+                        <Field error={form.errors.date_to} label="Fecha programada hasta (UTC)">
+                            <input className={inputClassName} max="9999-12-30" min={form.data.date_from || '1753-01-01'} onChange={(event) => form.setData('date_to', event.target.value)} type="date" value={form.data.date_to} />
+                        </Field>
+                    </div>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">Las fechas incluyen el día completo en UTC. El servidor y el estado deben coincidir en el mismo trabajo.</p>
+                    <div className="flex flex-wrap gap-2">
+                        <button className={primaryButton} disabled={form.processing} type="submit">Aplicar filtros</button>
+                        <Link className={secondaryButton} href={url}>Limpiar filtros</Link>
+                    </div>
+                </form>
+            </Card>
+            <Card title={`Programaciones (${history.total})`}>
+                <DeploymentsTable deployments={history.data} emptyMessage={history.current_page > history.last_page ? 'No hay programaciones en esta página.' : Object.values(filters).some(Boolean) ? 'No se encontraron programaciones para los filtros seleccionados.' : 'Aún no hay programaciones.'} />
+                {history.last_page > 1 || history.current_page > 1 ? (
+                    <nav aria-label="Paginación del historial" className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 px-5 py-4 text-sm dark:border-slate-800">
+                        <span className="text-slate-600 dark:text-slate-300">Página {history.current_page} de {history.last_page}</span>
+                        <div className="flex gap-2">
+                            {history.current_page > 1 && <Link className={secondaryButton} href={pageUrl(history.current_page > history.last_page ? 1 : history.current_page - 1)} preserveScroll>{history.current_page > history.last_page ? 'Primera página' : 'Anterior'}</Link>}
+                            {history.current_page < history.last_page && <Link className={secondaryButton} href={pageUrl(history.current_page + 1)} preserveScroll>Siguiente</Link>}
+                        </div>
+                    </nav>
+                ) : null}
+            </Card>
+        </div>
+    );
+}
+
+function DeploymentsTable({ deployments, emptyMessage = 'Aún no hay programaciones.', limit }) {
     const rows = limit ? deployments.slice(0, limit) : deployments;
 
     if (rows.length === 0) {
-        return <EmptyState>Aún no hay programaciones.</EmptyState>;
+        return <EmptyState>{emptyMessage}</EmptyState>;
     }
 
     return (
@@ -788,7 +859,7 @@ function UsersManagement({ users }) {
     );
 }
 
-export default function Panel({ agentDownloads, appVersion, canManageUsers = false, deployments, deploymentTimezone, passwordUpdateUrl, profileUpdateUrl, projects, projectTagsSyncAllUrl, section, sectionUrls, servers, user, users = [] }) {
+export default function Panel({ agentDownloads, appVersion, canManageUsers = false, deploymentFilters, deploymentHistory, deployments, deploymentTimezone, passwordUpdateUrl, profileUpdateUrl, projects, projectTagsSyncAllUrl, section, sectionUrls, servers, user, users = [] }) {
     const [modal, setModal] = useState(null);
     const [tokenReveal, setTokenReveal] = useState(null);
     const [menuOpen, setMenuOpen] = useState(false);
@@ -958,7 +1029,7 @@ export default function Panel({ agentDownloads, appVersion, canManageUsers = fal
                             </>
                         )}
 
-                        {section === 'deployments' && <Card title={`Programaciones (${deployments.length})`}><DeploymentsTable deployments={deployments} /></Card>}
+                        {section === 'deployments' && <DeploymentHistory filters={deploymentFilters} history={deploymentHistory} projects={projects} servers={servers} url={sectionUrls.deployments} />}
 
                         {section === 'projects' && (
                             <ProjectsGrid
