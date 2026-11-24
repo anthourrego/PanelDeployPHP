@@ -3,11 +3,66 @@
 use App\Models\DeploymentTarget;
 use App\Models\Server;
 use App\Models\User;
+use App\Services\Installer;
+use App\Services\InstallerException;
+use App\Services\LocalInstallerBootstrap;
+use Illuminate\Foundation\Console\ServeCommand;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rules\Password;
+
+Artisan::command('panel:install-local', function (LocalInstallerBootstrap $bootstrap) {
+    if (! defined('STDIN') || ! function_exists('stream_isatty') || ! stream_isatty(STDIN)) {
+        $this->warn('El asistente local requiere una terminal interactiva; no se modificó la instalación.');
+
+        return 0;
+    }
+
+    $this->info('Comprobando la instalación y las dependencias del frontend...');
+    try {
+        $code = $bootstrap->prepare();
+    } catch (InstallerException $exception) {
+        $this->error($exception->getMessage());
+
+        return 1;
+    } catch (Throwable $exception) {
+        Log::error('No se pudo preparar el asistente local.', ['exception' => $exception::class]);
+        $this->error('No se pudo preparar el asistente local. Revise los permisos y las dependencias.');
+
+        return 1;
+    }
+
+    if ($code === null) {
+        $this->info('Se conservó la configuración existente; no se inició el asistente.');
+
+        return 0;
+    }
+
+    $_ENV['PANEL_INSTALLER_LOCAL'] = '1';
+    putenv('PANEL_INSTALLER_LOCAL=1');
+    ServeCommand::$passthroughVariables[] = 'PANEL_INSTALLER_LOCAL';
+    $this->line('Código temporal de instalación: '.$code);
+    $this->info('Abra http://127.0.0.1:8000/instalacion en este equipo. Presione Ctrl+C para detener el servidor.');
+
+    return $this->call('serve', ['--host' => '127.0.0.1', '--port' => 8000, '--tries' => 1, '--no-interaction' => true]);
+})->purpose('Preparar y servir el asistente local inicial');
+
+Artisan::command('panel:install-enable', function (Installer $installer) {
+    try {
+        $code = $installer->enable();
+    } catch (InstallerException $exception) {
+        $this->error($exception->getMessage());
+
+        return 1;
+    }
+
+    $this->line('Código temporal de instalación: '.$code);
+    $this->info('Abra /instalacion mediante HTTPS. El código vence en 30 minutos.');
+
+    return 0;
+})->purpose('Habilitar temporalmente la instalación inicial');
 
 Artisan::command('panel:create-user', function () {
     $name = $this->ask('Nombre');

@@ -43,6 +43,8 @@ return [
 
     'debug' => (bool) env('APP_DEBUG', false),
 
+    'installer_local' => (bool) env('PANEL_INSTALLER_LOCAL', false),
+
     /*
     |--------------------------------------------------------------------------
     | Application URL
