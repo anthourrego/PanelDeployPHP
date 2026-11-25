@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Services\Installer;
 use App\Services\InstallerException;
+use Closure;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Response;
@@ -31,6 +32,12 @@ class InstallerController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'code' => [$this->installer->isLocal() ? 'nullable' : 'required', 'string', 'regex:/\A[a-f0-9]{64}\z/D'],
+            'app_url' => ['bail', 'required', 'string', 'max:2048', 'url:http,https', function (string $attribute, string $value, Closure $fail): void {
+                $parts = parse_url($value);
+                if ($parts === false || isset($parts['user']) || isset($parts['pass']) || isset($parts['query']) || isset($parts['fragment'])) {
+                    $fail('La URL del panel no debe contener credenciales, parámetros ni fragmentos.');
+                }
+            }],
             'driver' => ['sometimes', 'required', Rule::in(['sqlsrv', 'mysql'])],
             'host' => ['required', 'string', 'max:255', 'regex:/\A[A-Za-z0-9.:-]+\z/D', Rule::when($request->input('driver') === 'mysql', Rule::in(['localhost', '127.0.0.1', '::1']))],
             'port' => ['required', 'integer', 'between:1,65535'],
@@ -38,6 +45,11 @@ class InstallerController extends Controller
             'username' => ['required', 'string', 'max:255', 'regex:/\A[^\r\n\0]+\z/D'],
             'db_password' => ['nullable', 'string', 'max:1024', 'regex:/\A[^\r\n\0]*\z/D'],
             'trust_certificate' => ['nullable', 'boolean', 'prohibited_if:driver,mysql'],
+        ], [
+            'app_url.required' => 'Ingrese la URL definitiva del panel.',
+            'app_url.string' => 'La URL del panel debe ser un texto.',
+            'app_url.max' => 'La URL del panel es demasiado larga.',
+            'app_url.url' => 'Ingrese una URL válida con http:// o https://.',
         ]);
         if ($validator->fails()) {
             return response()->view('installer', ['authorized' => false, 'local' => $this->installer->isLocal(), 'errors' => $validator->errors()->all()], 422);
@@ -55,7 +67,7 @@ class InstallerController extends Controller
         ];
 
         try {
-            $authorization = $this->installer->prepare($input['code'] ?? null, $connection);
+            $authorization = $this->installer->prepare($input['code'] ?? null, $connection, rtrim($input['app_url'], '/'));
         } catch (InstallerException $exception) {
             return response()->view('installer', ['authorized' => false, 'local' => $this->installer->isLocal(), 'errors' => [$exception->getMessage()]], 422);
         } catch (Throwable $exception) {

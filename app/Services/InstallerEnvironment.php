@@ -10,7 +10,30 @@ class InstallerEnvironment
     /**
      * @param  array{driver?: string, host: string, port: string, database: string, username: string, password: string, trust_certificate: bool}  $connection
      */
-    public function write(array $connection): void
+    public function write(array $connection, string $appUrl): void
+    {
+        $this->writeValues([
+            'APP_URL' => $appUrl,
+            'DB_CONNECTION' => $connection['driver'] ?? 'sqlsrv',
+            'DB_URL' => '',
+            'DB_SOCKET' => '',
+            'DB_HOST' => $connection['host'],
+            'DB_PORT' => $connection['port'],
+            'DB_DATABASE' => $connection['database'],
+            'DB_USERNAME' => $connection['username'],
+            'DB_PASSWORD' => $connection['password'],
+            'DB_ENCRYPT' => 'yes',
+            'DB_TRUST_SERVER_CERTIFICATE' => $connection['trust_certificate'] ? 'true' : 'false',
+        ]);
+    }
+
+    public function writeAppUrl(string $appUrl): void
+    {
+        $this->writeValues(['APP_URL' => $appUrl]);
+    }
+
+    /** @param array<string, string> $values */
+    private function writeValues(array $values): void
     {
         $path = app()->environmentFilePath();
         if (! is_file($path) || is_link($path) || ! is_writable(dirname($path))) {
@@ -22,28 +45,16 @@ class InstallerEnvironment
             throw new InstallerException('No se pudo leer el archivo de entorno.');
         }
 
-        $values = [
-            'DB_CONNECTION' => $connection['driver'] ?? 'sqlsrv',
-            'DB_URL' => '',
-            'DB_SOCKET' => '',
-            'DB_HOST' => $connection['host'],
-            'DB_PORT' => $connection['port'],
-            'DB_DATABASE' => $connection['database'],
-            'DB_USERNAME' => $connection['username'],
-            'DB_PASSWORD' => $connection['password'],
-            'DB_ENCRYPT' => 'yes',
-            'DB_TRUST_SERVER_CERTIFICATE' => $connection['trust_certificate'] ? 'true' : 'false',
-        ];
         $entries = Lines::process(explode("\n", $original));
         $seen = [];
         foreach ($entries as $entry) {
             if (str_contains($entry, "\n")
                 && preg_match('/(?:^|\n)[ \t]*(?:export[ \t]+)?(?:'.implode('|', array_keys($values)).')[ \t]*=/D', $entry)) {
-                throw new InstallerException('El archivo de entorno contiene variables de base multilínea.');
+                throw new InstallerException('El archivo de entorno contiene variables de configuración multilínea.');
             }
             if (preg_match('/^[ \t]*(?:export[ \t]+)?([A-Za-z0-9_]+)[ \t]*=/', $entry, $matches) && array_key_exists($matches[1], $values)) {
                 if (isset($seen[$matches[1]]) || str_contains($entry, "\n")) {
-                    throw new InstallerException('El archivo de entorno contiene variables de base duplicadas o multilínea.');
+                    throw new InstallerException('El archivo de entorno contiene variables de configuración duplicadas o multilínea.');
                 }
                 $seen[$matches[1]] = true;
             }

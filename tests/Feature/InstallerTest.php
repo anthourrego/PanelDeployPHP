@@ -113,17 +113,75 @@ class InstallerTest extends TestCase
         DB::shouldReceive('purge')->with('installer')->twice();
         DB::shouldReceive('getConnections')->andReturn([]);
 
-        $response = $this->post('http://localhost/instalacion/conexion', [
+        $response = $this->post('http://localhost:8000/instalacion/conexion', [
+            'app_url' => 'https://panel.example.test:8443/panel/',
             'host' => 'localhost',
             'port' => '1433',
             'database' => 'test',
             'username' => 'test',
             'db_password' => 'secret-for-test',
-        ])->assertRedirect(route('installer.show'));
+        ])->assertRedirect('http://localhost:8000/instalacion');
 
+        config(['app.url' => 'https://panel.example.test:8443/panel']);
         $this->withUnencryptedCookie('panel_install_session', $response->getCookie('panel_install_session', false)->getValue())
-            ->get('http://localhost/instalacion')->assertOk()->assertSee('Nombre del administrador');
-        $this->assertSame('test', Dotenv::parse(file_get_contents($this->temporaryDirectory.'/.env'))['DB_DATABASE']);
+            ->get('http://localhost:8000/instalacion')->assertOk()
+            ->assertSee('Nombre del administrador')
+            ->assertSee('action="http://localhost:8000/instalacion/finalizar"', false);
+        $saved = Dotenv::parse(file_get_contents($this->temporaryDirectory.'/.env'));
+        $this->assertSame('test', $saved['DB_DATABASE']);
+        $this->assertSame('https://panel.example.test:8443/panel', $saved['APP_URL']);
+    }
+
+    public static function invalidAppUrls(): array
+    {
+        return [
+            'missing' => [null, 'Ingrese la URL definitiva del panel.'],
+            'invalid protocol' => ['ftp://panel.example.test', 'Ingrese una URL válida con http:// o https://.'],
+            'credentials' => ['https://user:secret-url-test@panel.example.test', 'La URL del panel no debe contener credenciales, parámetros ni fragmentos.'],
+            'malformed url with credentials' => ['https://user:secret-url-test@panel.example.test:invalid', 'Ingrese una URL válida con http:// o https://.'],
+            'query' => ['https://panel.example.test?token=secret-url-test', 'La URL del panel no debe contener credenciales, parámetros ni fragmentos.'],
+            'fragment' => ['https://panel.example.test#secret-url-test', 'La URL del panel no debe contener credenciales, parámetros ni fragmentos.'],
+            'invalid type' => [['https://panel.example.test'], 'La URL del panel debe ser un texto.'],
+        ];
+    }
+
+    #[DataProvider('invalidAppUrls')]
+    public function test_invalid_app_url_is_rejected_without_changing_configuration(mixed $url, string $message): void
+    {
+        app(Installer::class)->enable(local: true);
+        $path = $this->temporaryDirectory.'/.env';
+        $original = file_get_contents($path);
+        DB::shouldReceive('getConnections')->andReturn([]);
+        DB::shouldNotReceive('connection')->with('installer');
+
+        $this->post('http://localhost/instalacion/conexion', [
+            'app_url' => $url,
+            'driver' => 'mysql',
+            'host' => 'localhost',
+            'port' => '3306',
+            'database' => 'test_database',
+            'username' => 'test',
+        ])->assertUnprocessable()
+            ->assertSee($message)
+            ->assertDontSee('secret-url-test');
+
+        $this->assertSame($original, file_get_contents($path));
+    }
+
+    public function test_invalid_app_url_is_escaped_when_the_form_is_redisplayed(): void
+    {
+        app(Installer::class)->enable(local: true);
+
+        $this->post('http://localhost/instalacion/conexion', [
+            'app_url' => 'https://panel.example.test/"><script>alert(1)</script>',
+            'driver' => 'mysql',
+            'host' => 'localhost',
+            'port' => '3306',
+            'database' => 'test_database',
+            'username' => 'test',
+        ])->assertUnprocessable()
+            ->assertSee('&lt;script&gt;alert(1)&lt;/script&gt;', false)
+            ->assertDontSee('<script>alert(1)</script>', false);
     }
 
     public function test_mysql_rejects_remote_hosts_without_changing_configuration(): void
@@ -133,6 +191,7 @@ class InstallerTest extends TestCase
         $original = file_get_contents($path);
 
         $this->post('http://localhost/instalacion/conexion', [
+            'app_url' => 'http://localhost:8000',
             'driver' => 'mysql',
             'host' => 'example.test',
             'port' => '3306',
@@ -148,6 +207,7 @@ class InstallerTest extends TestCase
         app(Installer::class)->enable(local: true);
 
         $response = $this->post('http://localhost/instalacion/conexion', [
+            'app_url' => 'http://localhost:8000',
             'driver' => 'mysql',
             'host' => 'example.test',
             'port' => '3306',
@@ -157,6 +217,7 @@ class InstallerTest extends TestCase
         ])->assertUnprocessable();
 
         $response->assertSee('value="mysql" selected', false)
+            ->assertSee('name="app_url" value="http://localhost:8000"', false)
             ->assertSee('value="example.test"', false)
             ->assertSee('value="3306"', false)
             ->assertSee('value="test_database"', false)
@@ -170,6 +231,7 @@ class InstallerTest extends TestCase
         app(Installer::class)->enable(local: true);
 
         $this->post('http://localhost/instalacion/conexion', [
+            'app_url' => 'http://localhost:8000',
             'driver' => ['mysql'],
             'host' => ['localhost'],
             'port' => ['3306'],
@@ -235,6 +297,7 @@ class InstallerTest extends TestCase
         DB::shouldReceive('getConnections')->andReturn([]);
 
         $this->post('http://localhost/instalacion/conexion', [
+            'app_url' => 'http://localhost:8000',
             'driver' => $driver,
             'host' => 'localhost',
             'port' => $driver === 'mysql' ? '3306' : '1433',
@@ -274,6 +337,7 @@ class InstallerTest extends TestCase
         DB::shouldReceive('getConnections')->andReturn([]);
 
         $this->post('http://localhost/instalacion/conexion', [
+            'app_url' => 'http://localhost:8000',
             'driver' => $driver,
             'host' => 'localhost',
             'port' => $driver === 'mysql' ? '3306' : '1433',
@@ -304,6 +368,7 @@ class InstallerTest extends TestCase
         DB::shouldReceive('getConnections')->andReturn([]);
 
         $this->post('http://localhost/instalacion/conexion', [
+            'app_url' => 'http://localhost:8000',
             'driver' => 'sqlsrv',
             'host' => 'localhost',
             'port' => '1433',
@@ -327,6 +392,7 @@ class InstallerTest extends TestCase
         DB::shouldReceive('getConnections')->andReturn([]);
 
         $this->post('http://localhost/instalacion/conexion', [
+            'app_url' => 'http://localhost:8000',
             'driver' => 'sqlsrv',
             'host' => 'localhost',
             'port' => '1433',
@@ -350,6 +416,7 @@ class InstallerTest extends TestCase
         DB::shouldReceive('getConnections')->andReturn([]);
 
         $this->post('http://localhost/instalacion/conexion', [
+            'app_url' => 'http://localhost:8000',
             'driver' => 'sqlsrv',
             'host' => 'localhost',
             'port' => '1433',
@@ -371,6 +438,7 @@ class InstallerTest extends TestCase
         DB::shouldReceive('getConnections')->andReturn([]);
 
         $this->post('http://localhost/instalacion/conexion', [
+            'app_url' => 'http://localhost:8000',
             'driver' => 'mysql',
             'host' => 'localhost',
             'port' => '3306',
@@ -404,6 +472,7 @@ class InstallerTest extends TestCase
         DB::shouldReceive('getConnections')->andReturn([]);
 
         $this->post('http://localhost/instalacion/conexion', [
+            'app_url' => 'http://localhost:8000',
             'driver' => 'mysql',
             'host' => 'localhost',
             'port' => '3306',
@@ -424,6 +493,7 @@ class InstallerTest extends TestCase
         $database = 'panel_installer_'.bin2hex(random_bytes(8));
 
         $this->post('http://localhost/instalacion/conexion', [
+            'app_url' => 'http://localhost:8000',
             'driver' => 'mysql',
             'host' => '127.0.0.1',
             'port' => '23306',
@@ -458,7 +528,7 @@ class InstallerTest extends TestCase
         DB::shouldReceive('connection')->with('installer')->twice()->andReturn($database);
         DB::shouldReceive('purge')->with('installer')->times(4);
         DB::shouldReceive('getConnections')->andReturn([]);
-        $input = ['driver' => 'mysql', 'host' => '127.0.0.1', 'port' => '3306', 'database' => 'test', 'username' => 'test'];
+        $input = ['app_url' => 'http://localhost:8000', 'driver' => 'mysql', 'host' => '127.0.0.1', 'port' => '3306', 'database' => 'test', 'username' => 'test'];
 
         $this->post('http://localhost/instalacion/conexion', $input)->assertUnprocessable();
         $this->post('http://localhost/instalacion/conexion', $input)->assertUnprocessable();
@@ -474,6 +544,7 @@ class InstallerTest extends TestCase
 
         app(Installer::class)->enable(local: true);
         $input = [
+            'app_url' => 'http://localhost:8000',
             'driver' => 'mysql',
             'host' => '127.0.0.1',
             'port' => '3306',
@@ -553,6 +624,7 @@ class InstallerTest extends TestCase
     {
         app(Installer::class)->enable();
         $input = [
+            'app_url' => 'http://localhost:8000',
             'code' => str_repeat('a', 64),
             'host' => 'localhost',
             'port' => '1433',
@@ -589,6 +661,7 @@ class InstallerTest extends TestCase
         DB::shouldReceive('getConnections')->andReturn([]);
 
         $this->post('https://localhost/instalacion/conexion', [
+            'app_url' => 'http://localhost:8000',
             'code' => $code,
             'driver' => 'sqlsrv',
             'host' => 'example.test',
@@ -635,10 +708,10 @@ class InstallerTest extends TestCase
         DB::shouldReceive('purge')->with('installer')->twice();
         DB::shouldReceive('getConnections')->andReturn([]);
 
-        $authorization = $installer->prepare($code, $connection);
+        $authorization = $installer->prepare($code, $connection, 'http://localhost:8000');
         $this->assertTrue($installer->authorized($authorization));
         try {
-            $installer->prepare($code, $connection);
+            $installer->prepare($code, $connection, 'http://localhost:8000');
             $this->fail('Se esperaba el rechazo del código ya utilizado.');
         } catch (InstallerException $exception) {
             $this->assertStringContainsString('ya se utilizó', $exception->getMessage());
@@ -646,8 +719,13 @@ class InstallerTest extends TestCase
 
         $newCode = $installer->enable();
         $this->assertFalse($installer->authorized($authorization));
-        $newAuthorization = $installer->prepare($newCode, $connection);
+        $path = $this->temporaryDirectory.'/.env';
+        file_put_contents($path, str_replace('DB_HOST="example.test"', 'DB_HOST="changed.example.test"', file_get_contents($path)));
+        $newAuthorization = $installer->prepare($newCode, $connection, 'https://panel.example.test');
         $this->assertTrue($installer->authorized($newAuthorization));
+        $saved = Dotenv::parse(file_get_contents($path));
+        $this->assertSame('https://panel.example.test', $saved['APP_URL']);
+        $this->assertSame('changed.example.test', $saved['DB_HOST']);
     }
 
     public function test_expired_code_disables_installer_until_reenabled(): void
@@ -666,7 +744,7 @@ class InstallerTest extends TestCase
     public function test_environment_writer_preserves_other_settings_and_special_characters(): void
     {
         $path = $this->temporaryDirectory.'/.env';
-        file_put_contents($path, "APP_KEY=test-preserved-key\nDB_HOST=old\nDB_URL=old\nOTHER=unchanged\n");
+        file_put_contents($path, "APP_KEY=test-preserved-key\nAPP_URL=http://old.example.test\nDB_HOST=old\nDB_URL=old\nOTHER=unchanged\n");
         $password = ' spaces ${OTHER} "quoted" \\ # and \'apostrophe\' ';
 
         app(InstallerEnvironment::class)->write([
@@ -676,10 +754,11 @@ class InstallerTest extends TestCase
             'username' => 'test',
             'password' => $password,
             'trust_certificate' => false,
-        ]);
+        ], 'http://localhost:8000');
 
         $saved = Dotenv::parse(file_get_contents($path));
         $this->assertSame('test-preserved-key', $saved['APP_KEY']);
+        $this->assertSame('http://localhost:8000', $saved['APP_URL']);
         $this->assertSame('unchanged', $saved['OTHER']);
         $this->assertSame('', $saved['DB_URL']);
         $this->assertSame($password, $saved['DB_PASSWORD']);
@@ -699,10 +778,33 @@ class InstallerTest extends TestCase
                 'username' => 'test',
                 'password' => 'test',
                 'trust_certificate' => false,
-            ]);
+            ], 'http://localhost:8000');
             $this->fail('Se esperaba el rechazo de variables duplicadas.');
         } catch (InstallerException $exception) {
-            $this->assertSame('El archivo de entorno contiene variables de base duplicadas o multilínea.', $exception->getMessage());
+            $this->assertSame('El archivo de entorno contiene variables de configuración duplicadas o multilínea.', $exception->getMessage());
+        }
+
+        $this->assertSame($original, file_get_contents($path));
+    }
+
+    public function test_environment_writer_refuses_duplicate_app_urls_without_modifying_the_file(): void
+    {
+        $path = $this->temporaryDirectory.'/.env';
+        $original = "APP_KEY=test-preserved-key\nAPP_URL=http://one.test\nAPP_URL=http://two.test\n";
+        file_put_contents($path, $original);
+
+        try {
+            app(InstallerEnvironment::class)->write([
+                'host' => 'example.test',
+                'port' => '1433',
+                'database' => 'test',
+                'username' => 'test',
+                'password' => 'test',
+                'trust_certificate' => false,
+            ], 'https://panel.example.test');
+            $this->fail('Se esperaba el rechazo de URL duplicadas.');
+        } catch (InstallerException $exception) {
+            $this->assertSame('El archivo de entorno contiene variables de configuración duplicadas o multilínea.', $exception->getMessage());
         }
 
         $this->assertSame($original, file_get_contents($path));
@@ -722,10 +824,10 @@ class InstallerTest extends TestCase
                 'username' => 'test',
                 'password' => 'test',
                 'trust_certificate' => false,
-            ]);
+            ], 'http://localhost:8000');
             $this->fail('Se esperaba el rechazo del valor multilínea.');
         } catch (InstallerException $exception) {
-            $this->assertSame('El archivo de entorno contiene variables de base multilínea.', $exception->getMessage());
+            $this->assertSame('El archivo de entorno contiene variables de configuración multilínea.', $exception->getMessage());
         }
 
         $this->assertSame($original, file_get_contents($path));
@@ -758,6 +860,7 @@ class InstallerTest extends TestCase
         );
 
         $response = $this->post('https://localhost/instalacion/conexion', [
+            'app_url' => 'http://localhost:8000',
             'code' => $code,
             'host' => $connection['host'],
             'port' => $connection['port'],

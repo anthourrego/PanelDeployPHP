@@ -97,9 +97,9 @@ class Installer
     /**
      * @param  array{driver?: string, host: string, port: string, database: string, username: string, password: string, trust_certificate: bool}  $connection
      */
-    public function prepare(?string $code, array $connection): string
+    public function prepare(?string $code, array $connection, string $appUrl): string
     {
-        return $this->locked(function (?array $state) use ($code, $connection): string {
+        return $this->locked(function (?array $state) use ($code, $connection, $appUrl): string {
             if (! $this->active($state)) {
                 throw new InstallerException('La instalación no está habilitada o el código venció.');
             }
@@ -126,6 +126,7 @@ class Installer
                     throw new InstallerException('La conexión no corresponde a la instalación iniciada.');
                 }
 
+                $this->environment->writeAppUrl($appUrl);
                 if ($local) {
                     $state['code_hash'] = hash('sha256', random_bytes(32));
                 }
@@ -163,7 +164,7 @@ class Installer
                 DB::purge('installer');
             }
 
-            $this->environment->write($connection);
+            $this->environment->write($connection, $appUrl);
             if ($local) {
                 $state['code_hash'] = hash('sha256', random_bytes(32));
             }

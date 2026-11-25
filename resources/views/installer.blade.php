@@ -40,8 +40,13 @@
         @if (! $authorized)
             @php
                 $connectionInput = request()->isMethod('POST')
-                    ? array_filter(request()->only(['driver', 'host', 'port', 'database', 'username', 'trust_certificate']), 'is_scalar')
+                    ? array_filter(request()->only(['app_url', 'driver', 'host', 'port', 'database', 'username', 'trust_certificate']), 'is_scalar')
                     : [];
+                $appUrl = $connectionInput['app_url'] ?? (request()->isMethod('POST') ? '' : config('app.url'));
+                $urlParts = is_string($appUrl) ? parse_url($appUrl) : false;
+                if (! is_array($urlParts) || ! isset($urlParts['host']) || isset($urlParts['user']) || isset($urlParts['pass']) || isset($urlParts['query']) || isset($urlParts['fragment'])) {
+                    $appUrl = '';
+                }
             @endphp
             <p class="intro">Ingrese @if (! $local) el código generado en el servidor y @endif los datos de conexión. La base debe estar vacía; si no existe, se intentará crearla.</p>
             <form class="form" method="post" action="{{ route('installer.connect') }}" autocomplete="off">
@@ -49,6 +54,10 @@
                 @if (! $local)
                     <label class="field">Código temporal <input type="password" name="code" required></label>
                 @endif
+                <label class="field">URL definitiva del panel
+                    <input type="url" name="app_url" value="{{ $appUrl }}" aria-describedby="app-url-hint" required>
+                    <span class="hint" id="app-url-hint">Dirección pública del panel, incluyendo http:// o https:// y el puerto si corresponde. No cambia la dirección del instalador.</span>
+                </label>
                 <label class="field">Motor de base de datos
                     <select name="driver" required>
                         <option value="sqlsrv" @selected(($connectionInput['driver'] ?? 'sqlsrv') === 'sqlsrv')>SQL Server</option>
