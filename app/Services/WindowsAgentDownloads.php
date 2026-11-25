@@ -42,6 +42,6 @@ class WindowsAgentDownloads
     {
         return $this->file($package) === null
             ? null
-            : route('servers.agent.download', ['package' => $package], absolute: false);
+            : route('servers.agent.download', ['package' => $package]);
     }
 }

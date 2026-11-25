@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Panel de despliegues</title>
-    <link rel="icon" href="/favicon.ico" sizes="32x32">
+    <link rel="icon" href="{{ asset('favicon.ico') }}" sizes="32x32">
     <script>
         try {
             document.documentElement.dataset.theme = localStorage.getItem('panel.theme') === 'dark' ? 'dark' : 'light';

@@ -1,5 +1,6 @@
 import { useForm } from '@inertiajs/react';
 import { useEffect, useState } from 'react';
+import { useAppUrl } from '../lib/urls';
 import DeploymentSchedule from './DeploymentSchedule';
 import { Field, Hint, Icon, Modal, PasswordInput, inputClassName, primaryButton, secondaryButton } from './ui';
 
@@ -15,11 +16,12 @@ function Actions({ disabled, onClose, processing, submitLabel }) {
 }
 
 function useModalForm(initial, url, onClose, resetFields, method = 'post') {
+    const appUrl = useAppUrl();
     const form = useForm(initial);
 
     function submit(event) {
         event.preventDefault();
-        form[method](url, {
+        form[method](appUrl(url), {
             onSuccess: () => {
                 form.reset(...resetFields);
                 onClose();
@@ -266,11 +268,12 @@ export function DeploymentModal({ initialProjectId = '', initialRef = '', initia
 }
 
 export function SshModal({ onClose, project }) {
+    const appUrl = useAppUrl();
     const form = useForm({ ssh_url: project.ssh_url ?? '' });
 
     function submit(event) {
         event.preventDefault();
-        form.post(`/projects/${project.id}/ssh`, { onSuccess: onClose });
+        form.post(appUrl(`/projects/${project.id}/ssh`), { onSuccess: onClose });
     }
 
     return (

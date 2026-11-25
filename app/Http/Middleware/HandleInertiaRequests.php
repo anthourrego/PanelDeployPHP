@@ -37,6 +37,8 @@ class HandleInertiaRequests extends Middleware
     {
         return [
             ...parent::share($request),
+            'basePath' => $request->getBaseUrl(),
+            'logoUrl' => asset('img/prosof-logo.webp'),
             'flash' => [
                 'error' => fn () => $request->session()->get('error'),
                 'success' => fn () => $request->session()->get('success'),

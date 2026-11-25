@@ -1,6 +1,7 @@
-import { Head, useForm } from '@inertiajs/react';
+import { Head, useForm, usePage } from '@inertiajs/react';
 import ThemeToggle from '../../components/ThemeToggle';
 import { PasswordInput } from '../../components/ui';
+import { useAppUrl } from '../../lib/urls';
 
 const inputClassName = 'w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-base text-slate-900 outline-none transition focus:border-prosof-dark focus:ring-2 focus:ring-prosof-lime/40 dark:border-white/20 dark:bg-[#101b14] dark:text-slate-100';
 
@@ -15,6 +16,8 @@ function Field({ children, error, label }) {
 }
 
 export default function Login() {
+    const appUrl = useAppUrl();
+    const { logoUrl } = usePage().props;
     const form = useForm({
         username: '',
         password: '',
@@ -22,7 +25,7 @@ export default function Login() {
 
     function submit(event) {
         event.preventDefault();
-        form.post('/login', {
+        form.post(appUrl('/login'), {
             onSuccess: () => form.reset('password'),
         });
     }
@@ -36,7 +39,7 @@ export default function Login() {
                         <ThemeToggle />
                     </div>
                     <div className="flex flex-col items-center text-center">
-                        <img alt="Prosof" className="h-auto w-52 max-w-full p-2" src="/img/prosof-logo.webp" />
+                        <img alt="Prosof" className="h-auto w-52 max-w-full p-2" src={logoUrl} />
                         <h1 className="mt-8 text-2xl font-extrabold tracking-tight text-neutral-800 dark:text-slate-100">Panel de despliegues</h1>
                         <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">Ingresa con tu cuenta para continuar.</p>
                     </div>

@@ -1,8 +1,9 @@
-import { Head, Link, router, useForm } from '@inertiajs/react';
+import { Head, Link, router, useForm, usePage } from '@inertiajs/react';
 import { useEffect, useRef, useState } from 'react';
 import { AssignmentModal, DeploymentModal, PasswordModal, ProjectModal, ServerModal, SshModal, TokenModal, WindowsAgentGuideModal } from '../components/Modals';
 import ThemeToggle from '../components/ThemeToggle';
 import { confirmAction, notifyError, notifySuccess } from '../lib/notify';
+import { useAppUrl } from '../lib/urls';
 import { Badge, Card, EmptyState, Field, Hint, Icon, Modal, PasswordInput, StatusBadge, dangerButton, inputClassName, primaryButton, secondaryButton, targetStatuses } from '../components/ui';
 
 const SIDEBAR_KEY = 'panel.sidebar.collapsed';
@@ -152,6 +153,7 @@ function UserMenu({ onChangePassword, onEditProfile, onLogout, processing, user 
 }
 
 function CancelTargetButton({ target }) {
+    const appUrl = useAppUrl();
     const form = useForm({});
 
     return (
@@ -166,7 +168,7 @@ function CancelTargetButton({ target }) {
                     danger: true,
                 });
                 if (confirmed) {
-                    form.post(`/targets/${target.id}/cancel`);
+                    form.post(appUrl(`/targets/${target.id}/cancel`));
                 }
             }}
             type="button"
@@ -188,6 +190,7 @@ function TargetsList({ targets }) {
 }
 
 function DeploymentActions({ deployment }) {
+    const appUrl = useAppUrl();
     const hasPending = deployment.targets.some((target) => target.status === 'pending');
 
     return (
@@ -195,7 +198,7 @@ function DeploymentActions({ deployment }) {
             {hasPending && (
                 <button
                     className={dangerButton}
-                    onClick={() => runAction('post', `/deployments/${deployment.id}/cancel`, {
+                    onClick={() => runAction('post', appUrl(`/deployments/${deployment.id}/cancel`), {
                         title: '¿Cancelar la programación?',
                         text: 'Se cancelarán todos los trabajos pendientes de esta programación.',
                         confirmText: 'Sí, cancelar',
@@ -209,7 +212,7 @@ function DeploymentActions({ deployment }) {
             {deployment.can_delete && (
                 <button
                     className={dangerButton}
-                    onClick={() => runAction('delete', `/deployments/${deployment.id}`, {
+                    onClick={() => runAction('delete', appUrl(`/deployments/${deployment.id}`), {
                         title: '¿Eliminar la programación?',
                         text: 'Se borrará del listado. Esta acción no se puede deshacer.',
                         confirmText: 'Sí, eliminar',
@@ -346,6 +349,7 @@ function DeploymentsTable({ deployments, emptyMessage = 'Aún no hay programacio
 }
 
 function ServerActions({ server }) {
+    const appUrl = useAppUrl();
     const canDelete = !server.has_history && !server.active_target_id;
 
     return (
@@ -353,7 +357,7 @@ function ServerActions({ server }) {
             <button
                 className={secondaryButton.replace('px-4 py-2 text-sm', 'px-3 py-1.5 text-xs')}
                 disabled={server.active_target_id !== null}
-                onClick={() => (server.has_token ? runAction : generateToken)('post', `/servers/${server.id}/token`, {
+                onClick={() => (server.has_token ? runAction : generateToken)('post', appUrl(`/servers/${server.id}/token`), {
                     title: '¿Regenerar el token?',
                     text: 'El token anterior dejará de funcionar y deberá actualizarlo en el agente de este servidor.',
                     confirmText: 'Sí, regenerar',
@@ -366,7 +370,7 @@ function ServerActions({ server }) {
             <button
                 className={secondaryButton.replace('px-4 py-2 text-sm', 'px-3 py-1.5 text-xs')}
                 disabled={server.is_active && server.active_target_id !== null}
-                onClick={() => runAction('post', `/servers/${server.id}/active`, {
+                onClick={() => runAction('post', appUrl(`/servers/${server.id}/active`), {
                     data: { is_active: !server.is_active },
                     title: server.is_active ? '¿Desactivar el servidor?' : '¿Activar el servidor?',
                     text: server.is_active ? 'No recibirá nuevos trabajos; los pendientes quedarán en espera.' : 'Volverá a recibir trabajos programados.',
@@ -381,7 +385,7 @@ function ServerActions({ server }) {
             {canDelete && (
                 <button
                     className={dangerButton}
-                    onClick={() => runAction('delete', `/servers/${server.id}`, {
+                    onClick={() => runAction('delete', appUrl(`/servers/${server.id}`), {
                         title: '¿Eliminar el servidor?',
                         text: `Se eliminará "${server.name}" y sus rutas asignadas. Esta acción no se puede deshacer.`,
                         confirmText: 'Sí, eliminar',
@@ -423,6 +427,7 @@ function ServersList({ servers, showActions = false }) {
 }
 
 function DeletedProjects({ projects }) {
+    const appUrl = useAppUrl();
     if (projects.length === 0) {
         return null;
     }
@@ -445,7 +450,7 @@ function DeletedProjects({ projects }) {
                         </div>
                         <button
                             className={`${secondaryButton} px-3! py-1.5! text-xs!`}
-                            onClick={() => runAction('patch', `/projects/${project.id}/restore`, {
+                            onClick={() => runAction('patch', appUrl(`/projects/${project.id}/restore`), {
                                 title: '¿Restaurar el proyecto?',
                                 text: 'Volverá a aparecer con su configuración, rutas y estado anteriores.',
                                 confirmText: 'Sí, restaurar',
@@ -462,12 +467,13 @@ function DeletedProjects({ projects }) {
 }
 
 function ProjectsGrid({ onAssign, onEdit, onScheduleUpdate, onSsh, projects, syncAllUrl, trashedProjects }) {
+    const appUrl = useAppUrl();
     const [syncing, setSyncing] = useState(null);
     const [selectedProjectId, setSelectedProjectId] = useState(projects[0]?.id ?? null);
 
     function syncTags(projectId = null) {
         setSyncing(projectId ?? 'all');
-        router.post(projectId === null ? syncAllUrl : `/projects/${projectId}/tags/sync`, {}, {
+        router.post(projectId === null ? syncAllUrl : appUrl(`/projects/${projectId}/tags/sync`), {}, {
             preserveScroll: true,
             onFinish: () => setSyncing(null),
         });
@@ -599,7 +605,7 @@ function ProjectsGrid({ onAssign, onEdit, onScheduleUpdate, onSsh, projects, syn
                                         <button
                                             aria-label={`Quitar ruta de ${server.name}`}
                                             className="shrink-0 rounded-lg p-2 text-slate-400 transition hover:bg-red-50 hover:text-red-700 dark:text-slate-400 dark:hover:bg-red-950/70 dark:hover:text-red-300"
-                                            onClick={() => runAction('delete', `/projects/${project.id}/servers/${server.id}`, {
+                                            onClick={() => runAction('delete', appUrl(`/projects/${project.id}/servers/${server.id}`), {
                                                 title: '¿Quitar esta ruta?',
                                                 text: `El proyecto dejará de poder desplegarse en ${server.name}.`,
                                                 confirmText: 'Sí, quitar',
@@ -691,7 +697,7 @@ function ProjectsGrid({ onAssign, onEdit, onScheduleUpdate, onSsh, projects, syn
                         <button className={secondaryButton} onClick={() => onEdit(project)} type="button"><Icon className="size-4" name="edit" />Editar</button>
                         <button
                             className={secondaryButton}
-                            onClick={() => runAction('post', `/projects/${project.id}/active`, {
+                            onClick={() => runAction('post', appUrl(`/projects/${project.id}/active`), {
                                 data: { is_active: !project.is_active },
                                 title: project.is_active ? '¿Desactivar el proyecto?' : '¿Activar el proyecto?',
                                 text: project.is_active ? 'No se podrán programar nuevos despliegues hasta activarlo de nuevo.' : 'Podrá programar despliegues de nuevo.',
@@ -705,7 +711,7 @@ function ProjectsGrid({ onAssign, onEdit, onScheduleUpdate, onSsh, projects, syn
                         <button
                             className={`${dangerButton} py-2 text-sm disabled:cursor-not-allowed`}
                             disabled={project.has_active_deployments}
-                            onClick={() => runAction('delete', `/projects/${project.id}`, {
+                            onClick={() => runAction('delete', appUrl(`/projects/${project.id}`), {
                                 title: '¿Enviar el proyecto a la papelera?',
                                 text: `Se ocultará "${project.name}". Se conservarán su historial y sus rutas, y podrás restaurarlo desde la papelera.`,
                                 confirmText: 'Sí, enviar a papelera',
@@ -753,6 +759,7 @@ function WindowsAgentDownloads({ downloads, onOpenGuide }) {
 }
 
 function UserForm({ editingUser, onClose, profile = false }) {
+    const appUrl = useAppUrl();
     const form = useForm({
         name: editingUser?.name ?? '',
         username: editingUser?.username ?? '',
@@ -770,7 +777,7 @@ function UserForm({ editingUser, onClose, profile = false }) {
             ));
             form.patch(editingUser.update_url, { preserveScroll: true, onSuccess: onClose });
         } else {
-            form.post('/usuarios', { onSuccess: () => form.reset() });
+            form.post(appUrl('/usuarios'), { onSuccess: () => form.reset() });
         }
     }
 
@@ -907,6 +914,8 @@ function UsersManagement({ users }) {
 }
 
 export default function Panel({ agentDownloads, appVersion, canManageUsers = false, deploymentFilters, deploymentHistory, deployments, deploymentTimezone, passwordUpdateUrl, profileUpdateUrl, projects, projectTagsSyncAllUrl, section, sectionUrls, servers, trashedProjects = [], user, users = [] }) {
+    const appUrl = useAppUrl();
+    const { logoUrl } = usePage().props;
     const [modal, setModal] = useState(null);
     const [tokenReveal, setTokenReveal] = useState(null);
     const [menuOpen, setMenuOpen] = useState(false);
@@ -916,7 +925,7 @@ export default function Panel({ agentDownloads, appVersion, canManageUsers = fal
     async function logout() {
         const confirmed = await confirmAction({ title: '¿Cerrar sesión?', text: 'Tendrá que ingresar de nuevo para continuar.', confirmText: 'Salir' });
         if (confirmed) {
-            logoutForm.post('/logout');
+            logoutForm.post(appUrl('/logout'));
         }
     }
 
@@ -988,7 +997,7 @@ export default function Panel({ agentDownloads, appVersion, canManageUsers = fal
                     <button aria-controls="panel-navigation" aria-expanded={!collapsed} aria-label={collapsed ? 'Expandir menú' : 'Contraer menú'} className="hidden size-10 shrink-0 place-items-center rounded-full bg-white/80 text-slate-700 transition hover:bg-white dark:bg-white/10 dark:text-slate-100 dark:hover:bg-white/20 lg:grid" onClick={() => setCollapsed(!collapsed)} type="button">
                         <Icon name={collapsed ? 'menu' : 'close'} />
                     </button>
-                    <img alt="Prosof" className="h-8 w-auto max-w-[45%] object-contain" src="/img/prosof-logo.webp" />
+                    <img alt="Prosof" className="h-8 w-auto max-w-[45%] object-contain" src={logoUrl} />
                     <p className="hidden border-l border-green-900/15 pl-5 text-sm text-slate-600 sm:block dark:border-white/15 dark:text-slate-300">Panel de despliegues <span className="font-semibold text-slate-900 dark:text-white">:: Prosof SAS</span></p>
                     <div className="ml-auto flex items-center gap-3">
                         <ThemeToggle />

@@ -87,10 +87,10 @@ class PanelController extends Controller
 
         return Inertia::render('Panel', [
             'user' => $request->user()->only(['name', 'username', 'email']),
-            'profileUpdateUrl' => route('profile.update', absolute: false),
-            'passwordUpdateUrl' => route('profile.password.update', absolute: false),
+            'profileUpdateUrl' => route('profile.update'),
+            'passwordUpdateUrl' => route('profile.password.update'),
             'appVersion' => config('app.version'),
-            'projectTagsSyncAllUrl' => route('projects.tags.sync-all', absolute: false),
+            'projectTagsSyncAllUrl' => route('projects.tags.sync-all'),
             'deploymentTimezone' => config('app.deployment_timezone'),
             'canManageUsers' => $request->user()->is_admin,
             'section' => $section,
@@ -106,17 +106,17 @@ class PanelController extends Controller
                     'email' => $user->email,
                     'is_admin' => $user->is_admin,
                     'is_active' => $user->is_active,
-                    'update_url' => route('users.update', $user, absolute: false),
-                    'active_url' => route('users.active', $user, absolute: false),
+                    'update_url' => route('users.update', $user),
+                    'active_url' => route('users.active', $user),
                 ])
                 ->all() : [],
             'sectionUrls' => [
-                'summary' => route('panel', absolute: false),
-                'deployments' => route('panel.deployments', absolute: false),
-                'projects' => route('panel.projects', absolute: false),
-                'servers' => route('panel.servers', absolute: false),
-                'downloads' => route('panel.downloads', absolute: false),
-                'users' => route('panel.users', absolute: false),
+                'summary' => route('panel'),
+                'deployments' => route('panel.deployments'),
+                'projects' => route('panel.projects'),
+                'servers' => route('panel.servers'),
+                'downloads' => route('panel.downloads'),
+                'users' => route('panel.users'),
             ],
             'projects' => Project::with(['servers', 'latestDeployment.targets.server'])->orderBy('name')->get()->map(function (Project $project) use ($serverVersions, $tagSync): array {
                 return [
@@ -125,7 +125,7 @@ class PanelController extends Controller
                     'gitea_url' => $project->gitea_url,
                     'owner' => $project->owner,
                     'repository' => $project->repository,
-                    'references_url' => route('projects.references', $project, absolute: false),
+                    'references_url' => route('projects.references', $project),
                     'servers' => $project->servers->map(function (Server $server) use ($project, $serverVersions, $tagSync): array {
                         $version = $serverVersions->get("{$project->id}:{$server->id}", [
                             'last_successful_deployment' => null,

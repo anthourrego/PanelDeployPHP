@@ -34,6 +34,82 @@ class PanelTest extends TestCase
             ->has('deployments', 0));
     }
 
+    public function test_login_uses_request_base_for_assets_and_actions_in_a_subdirectory(): void
+    {
+        config(['app.url' => 'https://panel.example.test']);
+        $this->withoutVite()->withServerVariables([
+            'SCRIPT_NAME' => '/PanelDeploy/public/index.php',
+            'SCRIPT_FILENAME' => 'index.php',
+        ]);
+
+        $this->get('http://localhost/PanelDeploy/public/login')->assertOk()
+            ->assertSee('href="http://localhost/PanelDeploy/public/favicon.ico"', false)
+            ->assertInertia(fn (Assert $page) => $page
+                ->component('Auth/Login')
+                ->where('basePath', '/PanelDeploy/public')
+                ->where('logoUrl', 'http://localhost/PanelDeploy/public/img/prosof-logo.webp'));
+    }
+
+    public function test_panel_links_keep_the_subdirectory(): void
+    {
+        $project = $this->makeProject();
+        $user = User::factory()->admin()->create();
+        $this->withServerVariables([
+            'SCRIPT_NAME' => '/PanelDeploy/public/index.php',
+            'SCRIPT_FILENAME' => 'index.php',
+        ])->actingAs($user);
+
+        $this->get('http://localhost/PanelDeploy/public/proyectos')->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->where('basePath', '/PanelDeploy/public')
+                ->where('sectionUrls.projects', 'http://localhost/PanelDeploy/public/proyectos')
+                ->where('profileUpdateUrl', 'http://localhost/PanelDeploy/public/perfil')
+                ->where('passwordUpdateUrl', 'http://localhost/PanelDeploy/public/perfil/contrasena')
+                ->where('projectTagsSyncAllUrl', 'http://localhost/PanelDeploy/public/projects/tags/sync-all')
+                ->where('projects.0.references_url', "http://localhost/PanelDeploy/public/projects/{$project->id}/references"));
+
+        $this->get('http://localhost/PanelDeploy/public/usuarios')->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->where('users.0.update_url', "http://localhost/PanelDeploy/public/usuarios/{$user->id}")
+                ->where('users.0.active_url', "http://localhost/PanelDeploy/public/usuarios/{$user->id}/estado"));
+    }
+
+    public function test_agent_download_link_keeps_the_subdirectory(): void
+    {
+        Storage::fake('local')->put('agent/win-x64/PanelDeploySetup.exe', 'installer fixture');
+        $this->withServerVariables([
+            'SCRIPT_NAME' => '/PanelDeploy/public/index.php',
+            'SCRIPT_FILENAME' => 'index.php',
+        ])->actingAs(User::factory()->create());
+
+        $this->get('http://localhost/PanelDeploy/public/descargas')->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->where('agentDownloads.installer', 'http://localhost/PanelDeploy/public/servidores/descargas/windows/installer'));
+    }
+
+    public function test_front_controller_is_kept_for_actions_but_not_for_assets(): void
+    {
+        $this->withoutVite()->withServerVariables([
+            'SCRIPT_NAME' => '/PanelDeploy/public/index.php',
+            'SCRIPT_FILENAME' => 'index.php',
+        ]);
+
+        $this->get('http://localhost/PanelDeploy/public/index.php/login')->assertOk()
+            ->assertSee('href="http://localhost/PanelDeploy/public/favicon.ico"', false)
+            ->assertInertia(fn (Assert $page) => $page
+                ->where('basePath', '/PanelDeploy/public/index.php')
+                ->where('logoUrl', 'http://localhost/PanelDeploy/public/img/prosof-logo.webp'));
+    }
+
+    public function test_login_assets_and_actions_keep_root_urls(): void
+    {
+        $this->withoutVite()->get('/login')->assertOk()
+            ->assertSee('href="http://localhost/favicon.ico"', false)
+            ->assertInertia(fn (Assert $page) => $page
+                ->where('basePath', '')
+                ->where('logoUrl', 'http://localhost/img/prosof-logo.webp'));
+    }
+
     public function test_panel_exposes_the_configured_deployment_timezone(): void
     {
         config(['app.deployment_timezone' => 'America/New_York']);
@@ -69,7 +145,7 @@ class PanelTest extends TestCase
             $this->get($url)->assertInertia(fn (Assert $page) => $page
                 ->component('Panel')
                 ->where('section', $section)
-                ->where("sectionUrls.{$section}", $url));
+                ->where("sectionUrls.{$section}", 'http://localhost'.rtrim($url, '/')));
         }
     }
 
@@ -215,8 +291,8 @@ class PanelTest extends TestCase
 
         $this->actingAs($user)->get('/')->assertInertia(fn (Assert $page) => $page
             ->component('Panel')
-            ->where('profileUpdateUrl', '/perfil')
-            ->where('passwordUpdateUrl', '/perfil/contrasena')
+            ->where('profileUpdateUrl', 'http://localhost/perfil')
+            ->where('passwordUpdateUrl', 'http://localhost/perfil/contrasena')
             ->has('user', fn (Assert $userPage) => $userPage
                 ->where('name', 'Usuario de prueba')
                 ->where('username', 'usuario.prueba')
@@ -365,8 +441,8 @@ class PanelTest extends TestCase
 
         $this->get('/descargas')->assertInertia(fn (Assert $page) => $page
             ->where('agentDownloads.version', '1.2.3')
-            ->where('agentDownloads.installer', '/servidores/descargas/windows/installer')
-            ->where('agentDownloads.agent', '/servidores/descargas/windows/agent'));
+            ->where('agentDownloads.installer', 'http://localhost/servidores/descargas/windows/installer')
+            ->where('agentDownloads.agent', 'http://localhost/servidores/descargas/windows/agent'));
 
         foreach (['installer' => 'PanelDeploySetup.exe', 'agent' => 'PanelDeployAgent.exe'] as $package => $name) {
             $response = $this->get('/servidores/descargas/windows/'.$package)
@@ -388,7 +464,7 @@ class PanelTest extends TestCase
 
         $this->get('/descargas')->assertInertia(fn (Assert $page) => $page
             ->where('agentDownloads.installer', null)
-            ->where('agentDownloads.agent', '/servidores/descargas/windows/agent'));
+            ->where('agentDownloads.agent', 'http://localhost/servidores/descargas/windows/agent'));
         $this->get('/servidores/descargas/windows/installer')->assertNotFound();
         $this->get('/servidores/descargas/windows/config.json')->assertNotFound();
     }
@@ -405,7 +481,7 @@ class PanelTest extends TestCase
 
         $disk->put('agent/win-x64/PanelDeployPowerShell.zip', 'zip fixture');
 
-        $this->get('/descargas')->assertInertia(fn (Assert $page) => $page->where('agentDownloads.powershell', $url));
+        $this->get('/descargas')->assertInertia(fn (Assert $page) => $page->where('agentDownloads.powershell', 'http://localhost'.$url));
         $response = $this->get($url)->assertOk()
             ->assertDownload('PanelDeployPowerShell.zip')
             ->assertHeader('Content-Type', 'application/zip');
