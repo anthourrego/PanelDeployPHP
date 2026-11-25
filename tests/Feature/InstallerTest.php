@@ -142,6 +142,42 @@ class InstallerTest extends TestCase
         $this->assertSame($original, file_get_contents($path));
     }
 
+    public function test_connection_validation_error_preserves_non_sensitive_fields_safely(): void
+    {
+        app(Installer::class)->enable(local: true);
+
+        $response = $this->post('http://localhost/instalacion/conexion', [
+            'driver' => 'mysql',
+            'host' => 'example.test',
+            'port' => '3306',
+            'database' => 'test_database',
+            'username' => '<script>alert(1)</script>',
+            'db_password' => 'secret-for-test',
+        ])->assertUnprocessable();
+
+        $response->assertSee('value="mysql" selected', false)
+            ->assertSee('value="example.test"', false)
+            ->assertSee('value="3306"', false)
+            ->assertSee('value="test_database"', false)
+            ->assertSee('value="&lt;script&gt;alert(1)&lt;/script&gt;"', false)
+            ->assertDontSee('<script>alert(1)</script>', false)
+            ->assertDontSee('secret-for-test');
+    }
+
+    public function test_connection_validation_handles_non_scalar_input(): void
+    {
+        app(Installer::class)->enable(local: true);
+
+        $this->post('http://localhost/instalacion/conexion', [
+            'driver' => ['mysql'],
+            'host' => ['localhost'],
+            'port' => ['3306'],
+            'database' => ['test_database'],
+            'username' => ['test_user'],
+            'trust_certificate' => ['1'],
+        ])->assertUnprocessable();
+    }
+
     public function test_mysql_requires_visibility_of_the_entire_database_and_rejects_existing_tables(): void
     {
         app(Installer::class)->enable(local: true);
@@ -289,14 +325,23 @@ class InstallerTest extends TestCase
 
         $this->post('https://localhost/instalacion/conexion', [
             'code' => $code,
+            'driver' => 'sqlsrv',
             'host' => 'example.test',
             'port' => '1433',
             'database' => 'test',
             'username' => 'test',
             'db_password' => 'secret-for-test',
+            'trust_certificate' => '1',
         ])->assertUnprocessable()
             ->assertSee('No se pudo validar la conexión')
+            ->assertSee('value="sqlsrv" selected', false)
+            ->assertSee('value="example.test"', false)
+            ->assertSee('value="1433"', false)
+            ->assertSee('name="database" value="test"', false)
+            ->assertSee('name="username" value="test"', false)
+            ->assertSee('aria-describedby="certificate-hint" checked', false)
             ->assertDontSee('secret-for-test')
+            ->assertDontSee($code)
             ->assertDontSee('sensitive database failure');
 
         $this->assertSame($original, file_get_contents($path));

@@ -38,6 +38,11 @@
         @endif
 
         @if (! $authorized)
+            @php
+                $connectionInput = request()->isMethod('POST')
+                    ? array_filter(request()->only(['driver', 'host', 'port', 'database', 'username', 'trust_certificate']), 'is_scalar')
+                    : [];
+            @endphp
             <p class="intro">Ingrese @if (! $local) el código generado en el servidor y @endif los datos de una base ya creada, sin tablas ni vistas.</p>
             <form class="form" method="post" action="{{ route('installer.connect') }}" autocomplete="off">
                 @csrf
@@ -46,27 +51,27 @@
                 @endif
                 <label class="field">Motor de base de datos
                     <select name="driver" required>
-                        <option value="sqlsrv">SQL Server</option>
-                        <option value="mysql">MySQL local</option>
+                        <option value="sqlsrv" @selected(($connectionInput['driver'] ?? 'sqlsrv') === 'sqlsrv')>SQL Server</option>
+                        <option value="mysql" @selected(($connectionInput['driver'] ?? null) === 'mysql')>MySQL local</option>
                     </select>
                 </label>
                 <div class="fields">
                     <label class="field">Servidor
-                        <input name="host" aria-describedby="host-hint" required>
+                        <input name="host" value="{{ $connectionInput['host'] ?? '' }}" aria-describedby="host-hint" required>
                         <span class="hint" id="host-hint">Para MySQL use localhost, 127.0.0.1 o ::1.</span>
                     </label>
                     <label class="field">Puerto
-                        <input name="port" type="number" min="1" max="65535" aria-describedby="port-hint" required>
+                        <input name="port" type="number" min="1" max="65535" value="{{ $connectionInput['port'] ?? '' }}" aria-describedby="port-hint" required>
                         <span class="hint" id="port-hint">1433 para SQL Server; 3306 para MySQL.</span>
                     </label>
                 </div>
-                <label class="field">Base de datos <input name="database" required></label>
+                <label class="field">Base de datos <input name="database" value="{{ $connectionInput['database'] ?? '' }}" required></label>
                 <div class="fields">
-                    <label class="field">Usuario de base de datos <input name="username" required></label>
+                    <label class="field">Usuario de base de datos <input name="username" value="{{ $connectionInput['username'] ?? '' }}" required></label>
                     <label class="field">Contraseña de base de datos <input name="db_password" type="password"></label>
                 </div>
                 <div>
-                    <label class="checkbox"><input name="trust_certificate" type="checkbox" value="1" aria-describedby="certificate-hint"> Confiar en un certificado SQL Server no verificado</label>
+                    <label class="checkbox"><input name="trust_certificate" type="checkbox" value="1" aria-describedby="certificate-hint" @checked((string) ($connectionInput['trust_certificate'] ?? '') === '1')> Confiar en un certificado SQL Server no verificado</label>
                     <p class="hint" id="certificate-hint">Active esta opción solo si su administrador confirma que es necesaria y la conexión está protegida.</p>
                 </div>
                 <button class="button" type="submit">Verificar y guardar conexión</button>
