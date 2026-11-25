@@ -45,7 +45,7 @@ class InstallerSession
         $response->headers->set('Cache-Control', 'no-store, private');
         $response->headers->set('X-Robots-Tag', 'noindex, nofollow');
         $response->headers->set('Referrer-Policy', 'no-referrer');
-        $response->headers->set('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
+        $response->headers->set('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
 
         return $response;
     }

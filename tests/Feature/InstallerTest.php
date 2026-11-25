@@ -85,7 +85,10 @@ class InstallerTest extends TestCase
         app(Installer::class)->enable(local: true);
         $this->travel(31)->days();
 
-        $this->get('http://localhost/instalacion')->assertOk()->assertDontSee('Código temporal');
+        $response = $this->get('http://localhost/instalacion')->assertOk()->assertDontSee('Código temporal');
+        $this->assertStringContainsString("img-src 'self'", $response->headers->get('Content-Security-Policy'));
+        $this->assertStringContainsString("default-src 'none'", $response->headers->get('Content-Security-Policy'));
+        $this->assertStringNotContainsString('script-src', $response->headers->get('Content-Security-Policy'));
         $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.1'])
             ->get('http://localhost/instalacion')->assertNotFound();
         $this->post('http://localhost/instalacion/conexion', [])->assertNotFound();
