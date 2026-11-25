@@ -6,7 +6,6 @@ use App\Models\User;
 use App\Services\Installer;
 use App\Services\InstallerException;
 use App\Services\LocalInstallerBootstrap;
-use Illuminate\Foundation\Console\ServeCommand;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
@@ -14,12 +13,6 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\Rules\Password;
 
 Artisan::command('panel:install-local', function (LocalInstallerBootstrap $bootstrap) {
-    if (! defined('STDIN') || ! function_exists('stream_isatty') || ! stream_isatty(STDIN)) {
-        $this->warn('El asistente local requiere una terminal interactiva; no se modificó la instalación.');
-
-        return 0;
-    }
-
     $this->info('Comprobando la instalación y las dependencias del frontend...');
     try {
         $code = $bootstrap->prepare();
@@ -40,14 +33,10 @@ Artisan::command('panel:install-local', function (LocalInstallerBootstrap $boots
         return 0;
     }
 
-    $_ENV['PANEL_INSTALLER_LOCAL'] = '1';
-    putenv('PANEL_INSTALLER_LOCAL=1');
-    ServeCommand::$passthroughVariables[] = 'PANEL_INSTALLER_LOCAL';
-    $this->line('Código temporal de instalación: '.$code);
-    $this->info('Abra http://127.0.0.1:8000/instalacion en este equipo. Presione Ctrl+C para detener el servidor.');
+    $this->info('Asistente preparado. Configure Apache para servir la carpeta public y abra /instalacion desde este equipo.');
 
-    return $this->call('serve', ['--host' => '127.0.0.1', '--port' => 8000, '--tries' => 1, '--no-interaction' => true]);
-})->purpose('Preparar y servir el asistente local inicial');
+    return 0;
+})->purpose('Preparar el asistente local inicial');
 
 Artisan::command('panel:install-enable', function (Installer $installer) {
     try {

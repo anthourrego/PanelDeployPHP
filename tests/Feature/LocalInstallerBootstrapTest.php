@@ -69,8 +69,8 @@ class LocalInstallerBootstrapTest extends TestCase
 
     public function test_new_installation_creates_configuration_and_activates_installer(): void
     {
-        if (! extension_loaded('pdo_sqlite') || ! extension_loaded('pdo_sqlsrv')) {
-            $this->markTestSkipped('La instalación local requiere pdo_sqlite y pdo_sqlsrv.');
+        if (! extension_loaded('pdo_sqlite')) {
+            $this->markTestSkipped('La instalación local requiere pdo_sqlite.');
         }
         Process::fake();
 
@@ -78,12 +78,14 @@ class LocalInstallerBootstrapTest extends TestCase
 
         $this->assertMatchesRegularExpression('/\A[a-f0-9]{64}\z/', $code);
         $environment = Dotenv::parse(file_get_contents($this->temporaryDirectory.'/.env'));
+        $this->assertSame('production', $environment['APP_ENV']);
         $this->assertStringStartsWith('base64:', $environment['APP_KEY']);
         $this->assertSame(32, strlen(base64_decode(substr($environment['APP_KEY'], 7), true)));
         $this->assertSame('false', $environment['APP_DEBUG']);
-        $this->assertSame('http://127.0.0.1:8000', $environment['APP_URL']);
+        $this->assertSame('http://localhost', $environment['APP_URL']);
         $this->assertFileExists($this->temporaryDirectory.'/database/database.sqlite');
         $this->assertTrue(app(Installer::class)->isEnabled());
+        $this->assertTrue(app(Installer::class)->isLocal());
         Process::assertRan(['npm', 'ci', '--ignore-scripts']);
         Process::assertRan(['npm', 'run', 'build']);
     }
@@ -187,8 +189,8 @@ class LocalInstallerBootstrapTest extends TestCase
 
     public function test_failed_frontend_build_can_be_retried_without_replacing_a_key(): void
     {
-        if (! extension_loaded('pdo_sqlite') || ! extension_loaded('pdo_sqlsrv')) {
-            $this->markTestSkipped('La instalación local requiere pdo_sqlite y pdo_sqlsrv.');
+        if (! extension_loaded('pdo_sqlite')) {
+            $this->markTestSkipped('La instalación local requiere pdo_sqlite.');
         }
         Process::fake(['*' => Process::result(exitCode: 1)]);
 

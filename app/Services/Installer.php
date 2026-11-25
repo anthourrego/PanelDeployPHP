@@ -13,15 +13,18 @@ class Installer
 {
     public function __construct(private InstallerEnvironment $environment) {}
 
-    public function enable(): string
+    public function enable(bool $local = false): string
     {
         if (app()->configurationIsCached() || config('app.debug') || ! config('app.key')) {
             throw new InstallerException('Configure APP_KEY y APP_DEBUG=false, y elimine la caché de configuración antes de habilitar la instalación.');
         }
 
-        return $this->locked(function (?array $state): string {
+        return $this->locked(function (?array $state) use ($local): string {
             if (($state['phase'] ?? null) === 'complete') {
                 throw new InstallerException('La instalación ya fue completada.');
+            }
+            if ($state !== null && (($state['local'] ?? false) !== $local)) {
+                throw new InstallerException('El modo de instalación no coincide con la instalación iniciada.');
             }
 
             if ($state === null || ($state['phase'] ?? null) === 'connection') {
@@ -43,8 +46,9 @@ class Installer
 
             $code = bin2hex(random_bytes(32));
             $state ??= ['phase' => 'connection'];
+            $state['local'] = $local;
             $state['code_hash'] = hash('sha256', $code);
-            $state['expires_at'] = now()->addMinutes(30)->timestamp;
+            $state['expires_at'] = $local ? null : now()->addMinutes(30)->timestamp;
             $state['attempts'] = 0;
             $state['claimed'] = false;
             $this->writeState($state);
@@ -60,6 +64,15 @@ class Installer
         }
 
         return $this->locked(fn (?array $state): bool => $this->active($state));
+    }
+
+    public function isLocal(): bool
+    {
+        if (! is_file($this->statePath())) {
+            return false;
+        }
+
+        return $this->locked(fn (?array $state): bool => ($state['local'] ?? false) === true);
     }
 
     public function isComplete(): bool
@@ -81,31 +94,40 @@ class Installer
     }
 
     /**
-     * @param  array{host: string, port: string, database: string, username: string, password: string, trust_certificate: bool}  $connection
+     * @param  array{driver?: string, host: string, port: string, database: string, username: string, password: string, trust_certificate: bool}  $connection
      */
-    public function prepare(string $code, array $connection): string
+    public function prepare(?string $code, array $connection): string
     {
         return $this->locked(function (?array $state) use ($code, $connection): string {
             if (! $this->active($state)) {
                 throw new InstallerException('La instalación no está habilitada o el código venció.');
             }
 
-            if (! hash_equals($state['code_hash'], hash('sha256', $code))) {
+            $local = ($state['local'] ?? false) === true;
+            if (! $local && (! is_string($code) || ! hash_equals($state['code_hash'], hash('sha256', $code)))) {
                 $state['attempts']++;
                 $this->writeState($state);
                 throw new InstallerException('Código de instalación incorrecto.');
             }
 
-            if (($state['claimed'] ?? false) === true) {
+            if (! $local && ($state['claimed'] ?? false) === true) {
                 throw new InstallerException('El código ya se utilizó. Genere otro desde el servidor para continuar.');
             }
 
+            $driver = $connection['driver'] ?? 'sqlsrv';
+            if (! in_array($driver, ['sqlsrv', 'mysql'], true)
+                || ($driver === 'mysql' && (! in_array($connection['host'], ['localhost', '127.0.0.1', '::1'], true) || $connection['trust_certificate']))) {
+                throw new InstallerException('La conexión de base de datos no está permitida.');
+            }
             $fingerprint = $this->fingerprint($connection);
             if ($state['phase'] !== 'connection') {
                 if (! hash_equals($state['fingerprint'], $fingerprint)) {
                     throw new InstallerException('La conexión no corresponde a la instalación iniciada.');
                 }
 
+                if ($local) {
+                    $state['code_hash'] = hash('sha256', random_bytes(32));
+                }
                 $state['claimed'] = true;
                 $this->writeState($state);
 
@@ -116,15 +138,21 @@ class Installer
                 config(['database.connections.installer' => $this->connectionConfig($connection)]);
                 DB::purge('installer');
                 $database = DB::connection('installer');
-                $this->checkTarget($database, $connection['database']);
+                $this->checkTarget($database, $connection['database'], $driver);
             } catch (Throwable $exception) {
                 Log::warning('Falló la comprobación de la base de instalación.', ['exception' => $exception::class]);
+                if (! extension_loaded('pdo_'.$driver)) {
+                    throw new InstallerException('Falta la extensión PHP pdo_'.$driver.' para la base seleccionada.');
+                }
                 throw new InstallerException('No se pudo validar la conexión o la base contiene tablas o vistas. Verifique la conexión, el certificado y los permisos.');
             } finally {
                 DB::purge('installer');
             }
 
             $this->environment->write($connection);
+            if ($local) {
+                $state['code_hash'] = hash('sha256', random_bytes(32));
+            }
             $state['fingerprint'] = $fingerprint;
             $state['phase'] = 'prepared';
             $state['claimed'] = true;
@@ -152,16 +180,17 @@ class Installer
             }
 
             try {
-                $database = DB::connection('sqlsrv');
+                $driver = $connection['driver'];
+                $database = DB::connection($driver);
                 if ($state['phase'] === 'prepared') {
-                    $this->checkTarget($database, $connection['database']);
+                    $this->checkTarget($database, $connection['database'], $driver);
                     $state['phase'] = 'migrating';
                     $this->writeState($state);
                 } elseif ($database->getSchemaBuilder()->hasTable('users') && $database->table('users')->exists()) {
                     throw new InstallerException('Ya existe un usuario. Revise la instalación manualmente antes de continuar.');
                 }
 
-                if (Artisan::call('migrate', ['--database' => 'sqlsrv', '--force' => true]) !== 0) {
+                if (Artisan::call('migrate', ['--database' => $driver, '--force' => true]) !== 0) {
                     throw new InstallerException('Las migraciones no finalizaron.');
                 }
 
@@ -175,6 +204,9 @@ class Installer
                 });
             } catch (Throwable $exception) {
                 Log::error('Falló la inicialización de la base.', ['exception' => $exception::class]);
+                if (! extension_loaded('pdo_'.$connection['driver'])) {
+                    throw new InstallerException('Falta la extensión PHP pdo_'.$connection['driver'].' para la base seleccionada.');
+                }
                 throw new InstallerException('No se completó la instalación. No se borraron datos; revise las migraciones y los permisos antes de reintentar.');
             }
 
@@ -189,14 +221,33 @@ class Installer
         return $state !== null
             && in_array($state['phase'] ?? null, ['connection', 'prepared', 'migrating'], true)
             && is_string($state['code_hash'] ?? null)
-            && is_int($state['expires_at'] ?? null)
-            && ($state['attempts'] ?? 10) < 10
-            && $state['expires_at'] > now()->timestamp;
+            && (($state['local'] ?? false) === true
+                || (is_int($state['expires_at'] ?? null)
+                    && ($state['attempts'] ?? 10) < 10
+                    && $state['expires_at'] > now()->timestamp));
     }
 
-    /** @param array{host: string, port: string, database: string, username: string, password: string, trust_certificate: bool} $connection */
+    /** @param array{driver?: string, host: string, port: string, database: string, username: string, password: string, trust_certificate: bool} $connection */
     private function connectionConfig(array $connection): array
     {
+        if (($connection['driver'] ?? 'sqlsrv') === 'mysql') {
+            return [
+                'driver' => 'mysql',
+                'host' => $connection['host'],
+                'port' => $connection['port'],
+                'database' => $connection['database'],
+                'username' => $connection['username'],
+                'password' => $connection['password'],
+                'unix_socket' => '',
+                'charset' => 'utf8mb4',
+                'collation' => 'utf8mb4_unicode_ci',
+                'prefix' => '',
+                'prefix_indexes' => true,
+                'strict' => true,
+                'engine' => null,
+            ];
+        }
+
         return [
             'driver' => 'sqlsrv',
             'host' => $connection['host'],
@@ -213,8 +264,25 @@ class Installer
         ];
     }
 
-    private function checkTarget(Connection $connection, string $database): void
+    private function checkTarget(Connection $connection, string $database, string $driver): void
     {
+        if ($driver === 'mysql') {
+            $result = $connection->selectOne('SELECT DATABASE() AS database_name');
+            $permissions = $connection->selectOne(
+                "SELECT (EXISTS(SELECT 1 FROM information_schema.USER_PRIVILEGES WHERE GRANTEE = CONCAT(QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', 1)), '@', QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', -1))) AND PRIVILEGE_TYPE = 'SELECT') OR EXISTS(SELECT 1 FROM information_schema.SCHEMA_PRIVILEGES WHERE GRANTEE = CONCAT(QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', 1)), '@', QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', -1))) AND TABLE_SCHEMA = DATABASE() AND PRIVILEGE_TYPE = 'SELECT')) AS can_view"
+            );
+            if (! $result || $result->database_name !== $database || ! $permissions || (int) $permissions->can_view !== 1) {
+                throw new InstallerException('No se puede comprobar la base de destino.');
+            }
+
+            $objects = $connection->selectOne('SELECT COUNT(*) AS object_count FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()');
+            if (! $objects || (int) $objects->object_count !== 0) {
+                throw new InstallerException('La base contiene tablas o vistas.');
+            }
+
+            return;
+        }
+
         $result = $connection->selectOne("SELECT DB_NAME() AS database_name, HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'VIEW DEFINITION') AS can_view");
         if (! $result || strcasecmp($result->database_name, $database) !== 0 || (int) $result->can_view !== 1) {
             throw new InstallerException('No se puede comprobar la base de destino.');
@@ -228,26 +296,34 @@ class Installer
 
     private function configuredConnection(): array
     {
-        if (app()->configurationIsCached() || config('database.default') !== 'sqlsrv'
-            || config('database.connections.sqlsrv.url')
-            || config('database.connections.sqlsrv.encrypt') !== 'yes') {
+        $driver = config('database.default');
+        if (app()->configurationIsCached() || ! in_array($driver, ['sqlsrv', 'mysql'], true)
+            || config('database.connections.'.$driver.'.url')
+            || ($driver === 'sqlsrv' && config('database.connections.sqlsrv.encrypt') !== 'yes')
+            || ($driver === 'mysql' && (config('database.connections.mysql.unix_socket')
+                || ! in_array(config('database.connections.mysql.host'), ['localhost', '127.0.0.1', '::1'], true)))) {
             throw new InstallerException('La configuración activa no corresponde a la instalación.');
         }
 
-        $config = config('database.connections.sqlsrv');
+        $config = config('database.connections.'.$driver);
 
         return [
+            'driver' => $driver,
             'host' => (string) $config['host'],
             'port' => (string) $config['port'],
             'database' => (string) $config['database'],
             'username' => (string) $config['username'],
             'password' => (string) $config['password'],
-            'trust_certificate' => filter_var($config['trust_server_certificate'], FILTER_VALIDATE_BOOL),
+            'trust_certificate' => $driver === 'sqlsrv' && filter_var($config['trust_server_certificate'], FILTER_VALIDATE_BOOL),
         ];
     }
 
     private function fingerprint(array $connection): string
     {
+        if (($connection['driver'] ?? 'sqlsrv') === 'sqlsrv') {
+            unset($connection['driver']);
+        }
+
         return hash_hmac('sha256', json_encode($connection, JSON_THROW_ON_ERROR), config('app.key'));
     }
 

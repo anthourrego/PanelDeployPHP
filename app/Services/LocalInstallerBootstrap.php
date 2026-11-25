@@ -35,8 +35,8 @@ class LocalInstallerBootstrap
             $this->assertFreshInstallation();
         }
 
-        if (! extension_loaded('pdo_sqlite') || ! extension_loaded('pdo_sqlsrv')) {
-            throw new InstallerException('La instalación requiere las extensiones PHP pdo_sqlite y pdo_sqlsrv.');
+        if (! extension_loaded('pdo_sqlite')) {
+            throw new InstallerException('La instalación requiere la extensión PHP pdo_sqlite.');
         }
 
         if (! is_file($marker)) {
@@ -59,7 +59,7 @@ class LocalInstallerBootstrap
             }
 
             $contents = $template;
-            foreach (['APP_KEY' => $key, 'APP_DEBUG' => 'false', 'APP_URL' => 'http://127.0.0.1:8000'] as $name => $value) {
+            foreach (['APP_ENV' => 'production', 'APP_KEY' => $key, 'APP_DEBUG' => 'false', 'APP_URL' => 'http://localhost'] as $name => $value) {
                 $contents = preg_replace('/^'.preg_quote($name, '/').'=.*$/m', $name.'='.$value, $contents, 1, $count);
                 if ($count !== 1) {
                     throw new InstallerException('La plantilla de entorno no contiene la configuración inicial esperada.');
@@ -67,8 +67,9 @@ class LocalInstallerBootstrap
             }
 
             $parsed = Dotenv::parse($contents);
-            if (($parsed['APP_KEY'] ?? null) !== $key || ($parsed['APP_DEBUG'] ?? null) !== 'false'
-                || ($parsed['APP_URL'] ?? null) !== 'http://127.0.0.1:8000'
+            if (($parsed['APP_ENV'] ?? null) !== 'production'
+                || ($parsed['APP_KEY'] ?? null) !== $key || ($parsed['APP_DEBUG'] ?? null) !== 'false'
+                || ($parsed['APP_URL'] ?? null) !== 'http://localhost'
                 || ($parsed['DB_CONNECTION'] ?? null) !== 'sqlite'
                 || ! empty($parsed['DB_DATABASE']) || ! empty($parsed['DB_URL'])) {
                 throw new InstallerException('La plantilla de entorno no corresponde a una instalación nueva.');
@@ -89,7 +90,7 @@ class LocalInstallerBootstrap
             $this->createFile(database_path('database.sqlite'), '');
         }
 
-        return $this->installer->enable();
+        return $this->installer->enable(local: true);
     }
 
     private function assertFreshInstallation(): void

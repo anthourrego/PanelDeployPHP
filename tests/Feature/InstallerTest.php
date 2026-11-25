@@ -52,6 +52,180 @@ class InstallerTest extends TestCase
         $this->post('https://localhost/instalacion/finalizar')->assertForbidden();
     }
 
+    public function test_home_redirects_to_pending_local_installer_before_starting_the_database_session(): void
+    {
+        app(Installer::class)->enable(local: true);
+        config(['session.driver' => 'database']);
+
+        $this->get('http://localhost/')->assertRedirect('http://localhost/instalacion');
+        $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.1'])->get('http://localhost/')->assertNotFound();
+        $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.1'])
+            ->withHeader('X-Forwarded-For', '192.0.2.1')->get('http://localhost/')->assertNotFound();
+    }
+
+    public function test_home_uses_normal_authentication_when_installer_is_not_active(): void
+    {
+        $this->get('http://localhost/')->assertRedirect(route('login'));
+        app(Installer::class)->enable(local: true);
+        file_put_contents($this->temporaryDirectory.'/app/private/panel-installer.json', '{"phase":"complete","local":true}');
+
+        $this->get('http://localhost/')->assertRedirect(route('login'));
+    }
+
+    public function test_home_redirects_to_the_manually_enabled_installer_only_over_https(): void
+    {
+        app(Installer::class)->enable();
+
+        $this->get('https://localhost/')->assertRedirect('https://localhost/instalacion');
+        $this->get('http://localhost/')->assertNotFound();
+    }
+
+    public function test_local_installer_remains_available_without_a_code_only_on_loopback(): void
+    {
+        app(Installer::class)->enable(local: true);
+        $this->travel(31)->days();
+
+        $this->get('http://localhost/instalacion')->assertOk()->assertDontSee('Código temporal');
+        $this->withServerVariables(['REMOTE_ADDR' => '192.0.2.1'])
+            ->get('http://localhost/instalacion')->assertNotFound();
+        $this->post('http://localhost/instalacion/conexion', [])->assertNotFound();
+        $this->withServerVariables(['REMOTE_ADDR' => '127.0.0.1'])
+            ->get('http://example.test/instalacion')->assertNotFound();
+        $this->withHeader('X-Forwarded-For', '192.0.2.1')
+            ->get('http://localhost/instalacion')->assertNotFound();
+    }
+
+    public function test_local_installer_validates_connection_without_a_code(): void
+    {
+        app(Installer::class)->enable(local: true);
+        $database = $this->mock(Connection::class);
+        $database->shouldReceive('selectOne')->once()
+            ->with("SELECT DB_NAME() AS database_name, HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'VIEW DEFINITION') AS can_view")
+            ->andReturn((object) ['database_name' => 'test', 'can_view' => 1]);
+        $database->shouldReceive('selectOne')->once()
+            ->with("SELECT COUNT(*) AS object_count FROM sys.objects WHERE is_ms_shipped = 0 AND type IN ('U', 'V')")
+            ->andReturn((object) ['object_count' => 0]);
+        DB::shouldReceive('connection')->with('installer')->once()->andReturn($database);
+        DB::shouldReceive('purge')->with('installer')->twice();
+        DB::shouldReceive('getConnections')->andReturn([]);
+
+        $response = $this->post('http://localhost/instalacion/conexion', [
+            'host' => 'localhost',
+            'port' => '1433',
+            'database' => 'test',
+            'username' => 'test',
+            'db_password' => 'secret-for-test',
+        ])->assertRedirect(route('installer.show'));
+
+        $this->withUnencryptedCookie('panel_install_session', $response->getCookie('panel_install_session', false)->getValue())
+            ->get('http://localhost/instalacion')->assertOk()->assertSee('Nombre del administrador');
+        $this->assertSame('test', Dotenv::parse(file_get_contents($this->temporaryDirectory.'/.env'))['DB_DATABASE']);
+    }
+
+    public function test_mysql_rejects_remote_hosts_without_changing_configuration(): void
+    {
+        app(Installer::class)->enable(local: true);
+        $path = $this->temporaryDirectory.'/.env';
+        $original = file_get_contents($path);
+
+        $this->post('http://localhost/instalacion/conexion', [
+            'driver' => 'mysql',
+            'host' => 'example.test',
+            'port' => '3306',
+            'database' => 'test',
+            'username' => 'test',
+        ])->assertUnprocessable();
+
+        $this->assertSame($original, file_get_contents($path));
+    }
+
+    public function test_mysql_requires_visibility_of_the_entire_database_and_rejects_existing_tables(): void
+    {
+        app(Installer::class)->enable(local: true);
+        $path = $this->temporaryDirectory.'/.env';
+        $original = file_get_contents($path);
+        $database = $this->mock(Connection::class);
+        $database->shouldReceive('selectOne')->with('SELECT DATABASE() AS database_name')->twice()
+            ->andReturn((object) ['database_name' => 'test']);
+        $database->shouldReceive('selectOne')->with(\Mockery::on(fn ($sql): bool => str_contains($sql, 'information_schema.USER_PRIVILEGES')))->twice()
+            ->andReturn((object) ['can_view' => 0], (object) ['can_view' => 1]);
+        $database->shouldReceive('selectOne')->with('SELECT COUNT(*) AS object_count FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()')->once()
+            ->andReturn((object) ['object_count' => 1]);
+        DB::shouldReceive('connection')->with('installer')->twice()->andReturn($database);
+        DB::shouldReceive('purge')->with('installer')->times(4);
+        DB::shouldReceive('getConnections')->andReturn([]);
+        $input = ['driver' => 'mysql', 'host' => '127.0.0.1', 'port' => '3306', 'database' => 'test', 'username' => 'test'];
+
+        $this->post('http://localhost/instalacion/conexion', $input)->assertUnprocessable();
+        $this->post('http://localhost/instalacion/conexion', $input)->assertUnprocessable();
+
+        $this->assertSame($original, file_get_contents($path));
+    }
+
+    public function test_mysql_local_installation_runs_migrations_and_creates_administrator(): void
+    {
+        if (getenv('INSTALLER_TEST_MYSQL_DATABASE') !== 'panel_installer_test_copilot') {
+            $this->markTestSkipped('La prueba requiere la base MySQL temporal panel_installer_test_copilot.');
+        }
+
+        app(Installer::class)->enable(local: true);
+        $input = [
+            'driver' => 'mysql',
+            'host' => '127.0.0.1',
+            'port' => '3306',
+            'database' => 'panel_installer_test_copilot',
+            'username' => 'root',
+            'db_password' => '',
+        ];
+        config(['database.connections.installer_test_mysql' => array_merge(config('database.connections.mysql'), [
+            'url' => null,
+            'host' => $input['host'],
+            'port' => $input['port'],
+            'database' => $input['database'],
+            'username' => $input['username'],
+            'password' => $input['db_password'],
+            'unix_socket' => '',
+        ])]);
+        $testDatabase = DB::connection('installer_test_mysql');
+        $testDatabase->statement('CREATE TABLE installer_existing (id INT PRIMARY KEY)');
+        try {
+            $this->post('http://localhost/instalacion/conexion', $input)->assertUnprocessable();
+            $this->assertTrue($testDatabase->getSchemaBuilder()->hasTable('installer_existing'));
+        } finally {
+            $testDatabase->statement('DROP TABLE installer_existing');
+        }
+
+        $response = $this->post('http://localhost/instalacion/conexion', $input)
+            ->assertRedirect(route('installer.show'));
+
+        $saved = Dotenv::parse(file_get_contents($this->temporaryDirectory.'/.env'));
+        $this->assertSame('mysql', $saved['DB_CONNECTION']);
+        $this->assertSame('panel_installer_test_copilot', $saved['DB_DATABASE']);
+        config([
+            'database.default' => 'mysql',
+            'database.connections.mysql.url' => null,
+            'database.connections.mysql.host' => $saved['DB_HOST'],
+            'database.connections.mysql.port' => $saved['DB_PORT'],
+            'database.connections.mysql.database' => $saved['DB_DATABASE'],
+            'database.connections.mysql.username' => $saved['DB_USERNAME'],
+            'database.connections.mysql.password' => $saved['DB_PASSWORD'],
+            'database.connections.mysql.unix_socket' => '',
+        ]);
+        DB::purge('mysql');
+        $this->withUnencryptedCookie('panel_install_session', $response->getCookie('panel_install_session', false)->getValue());
+        $this->get('http://localhost/instalacion')->assertOk()->assertSee('panel_installer_test_copilot');
+        $this->post('http://localhost/instalacion/finalizar', [
+            'name' => 'Administrador de prueba',
+            'username' => 'installer_test',
+            'email' => 'installer_test@example.test',
+            'password' => 'temporary-test-password',
+            'password_confirmation' => 'temporary-test-password',
+        ])->assertOk()->assertSee('Instalación completada');
+
+        $this->assertDatabaseHas('users', ['username' => 'installer_test', 'is_admin' => true], 'mysql');
+        $this->get('http://localhost/instalacion')->assertNotFound();
+    }
+
     public function test_activation_refuses_a_database_with_existing_tables(): void
     {
         Schema::create('existing_data', fn ($table) => $table->id());

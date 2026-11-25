@@ -2,12 +2,15 @@
 
 namespace App\Http\Middleware;
 
+use App\Services\Installer;
 use Closure;
 use Illuminate\Http\Request;
 use Symfony\Component\HttpFoundation\Response;
 
 class RestrictLocalInstaller
 {
+    public function __construct(private Installer $installer) {}
+
     /**
      * Handle an incoming request.
      *
@@ -33,6 +36,30 @@ class RestrictLocalInstaller
             );
         }
 
+        if ($request->isMethod('GET') && $request->is('/') && ! config('app.debug') && $this->installer->isEnabled()) {
+            $local = $this->installer->isLocal();
+            abort_unless(
+                $local ? self::allowsLocalRequest($request) : ($request->isSecure() || config('app.installer_local')),
+                404,
+            );
+
+            return redirect()->route('installer.show');
+        }
+
         return $next($request);
+    }
+
+    public static function allowsLocalRequest(Request $request): bool
+    {
+        return in_array($request->server('REMOTE_ADDR'), ['127.0.0.1', '::1'], true)
+            && in_array($request->getHost(), ['127.0.0.1', 'localhost'], true)
+            && ! $request->headers->has('Forwarded')
+            && ! $request->headers->has('X-Forwarded-For')
+            && ! $request->headers->has('X-Forwarded-Host')
+            && ! $request->headers->has('X-Forwarded-Proto')
+            && ! $request->headers->has('X-Forwarded-Port')
+            && ! $request->headers->has('X-Forwarded-Prefix')
+            && ! $request->headers->has('X-Real-IP')
+            && ! $request->headers->has('Via');
     }
 }

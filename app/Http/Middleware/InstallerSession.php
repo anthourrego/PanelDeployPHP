@@ -19,7 +19,11 @@ class InstallerSession
      */
     public function handle(Request $request, Closure $next): Response
     {
-        abort_unless(($request->isSecure() || config('app.installer_local')) && ! config('app.debug') && $this->installer->isEnabled(), 404);
+        $local = $this->installer->isLocal();
+        if ($local) {
+            abort_unless(RestrictLocalInstaller::allowsLocalRequest($request), 404);
+        }
+        abort_unless(($request->isSecure() || config('app.installer_local') || $local) && ! config('app.debug') && $this->installer->isEnabled(), 404);
 
         $previous = config('session');
         config([

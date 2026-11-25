@@ -8,7 +8,7 @@ use Dotenv\Parser\Lines;
 class InstallerEnvironment
 {
     /**
-     * @param  array{host: string, port: string, database: string, username: string, password: string, trust_certificate: bool}  $connection
+     * @param  array{driver?: string, host: string, port: string, database: string, username: string, password: string, trust_certificate: bool}  $connection
      */
     public function write(array $connection): void
     {
@@ -23,8 +23,9 @@ class InstallerEnvironment
         }
 
         $values = [
-            'DB_CONNECTION' => 'sqlsrv',
+            'DB_CONNECTION' => $connection['driver'] ?? 'sqlsrv',
             'DB_URL' => '',
+            'DB_SOCKET' => '',
             'DB_HOST' => $connection['host'],
             'DB_PORT' => $connection['port'],
             'DB_DATABASE' => $connection['database'],
