@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Schema;
 use PDOException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class InstallerTest extends TestCase
@@ -176,6 +177,270 @@ class InstallerTest extends TestCase
             'username' => ['test_user'],
             'trust_certificate' => ['1'],
         ])->assertUnprocessable();
+    }
+
+    public static function missingDatabaseCases(): array
+    {
+        return [
+            'mysql' => ['mysql', 1049, null],
+            'sql server' => ['sqlsrv', 4060, null],
+            'mysql created concurrently' => ['mysql', 1049, 1007],
+            'sql server created concurrently' => ['sqlsrv', 4060, 1801],
+        ];
+    }
+
+    #[DataProvider('missingDatabaseCases')]
+    public function test_missing_database_is_created_or_rechecked_after_a_creation_race(string $driver, int $missingCode, ?int $existsCode): void
+    {
+        app(Installer::class)->enable(local: true);
+        $initial = \Mockery::mock(Connection::class);
+        $initial->shouldReceive('selectOne')->once()->andThrow($this->databaseException($missingCode));
+        $server = \Mockery::mock(Connection::class);
+        if ($driver === 'sqlsrv') {
+            $server->shouldReceive('selectOne')->once()
+                ->with("SELECT DB_ID(?) AS database_id, HAS_PERMS_BY_NAME(NULL, NULL, 'VIEW ANY DATABASE') AS can_view", ['test-database'])
+                ->andReturn((object) ['database_id' => null, 'can_view' => 1]);
+        }
+        $create = $server->shouldReceive('statement')->once()
+            ->with($driver === 'mysql' ? 'CREATE DATABASE `test-database`' : 'CREATE DATABASE [test-database]');
+        if ($existsCode === null) {
+            $create->andReturn(true);
+        } else {
+            $create->andThrow($this->databaseException($existsCode));
+        }
+        $target = \Mockery::mock(Connection::class);
+        if ($driver === 'mysql') {
+            $target->shouldReceive('selectOne')->once()->with('SELECT DATABASE() AS database_name')
+                ->andReturn((object) ['database_name' => 'test-database']);
+            $target->shouldReceive('selectOne')->once()->with(\Mockery::on(fn ($sql): bool => str_contains($sql, 'information_schema.USER_PRIVILEGES')))
+                ->andReturn((object) ['can_view' => 1]);
+            $target->shouldReceive('selectOne')->once()->with('SELECT COUNT(*) AS object_count FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()')
+                ->andReturn((object) ['object_count' => 0]);
+        } else {
+            $target->shouldReceive('selectOne')->once()
+                ->with("SELECT DB_NAME() AS database_name, HAS_PERMS_BY_NAME(DB_NAME(), 'DATABASE', 'VIEW DEFINITION') AS can_view")
+                ->andReturn((object) ['database_name' => 'test-database', 'can_view' => 1]);
+            $target->shouldReceive('selectOne')->once()
+                ->with("SELECT COUNT(*) AS object_count FROM sys.objects WHERE is_ms_shipped = 0 AND type IN ('U', 'V')")
+                ->andReturn((object) ['object_count' => 0]);
+        }
+        DB::shouldReceive('connection')->with('installer')->twice()->andReturn($initial, $target);
+        DB::shouldReceive('connection')->with('installer_server')->once()->andReturnUsing(function () use ($driver, $server) {
+            $this->assertSame($driver === 'mysql' ? '' : 'master', config('database.connections.installer_server.database'));
+
+            return $server;
+        });
+        DB::shouldReceive('purge')->with('installer')->times(3);
+        DB::shouldReceive('purge')->with('installer_server')->twice();
+        DB::shouldReceive('getConnections')->andReturn([]);
+
+        $this->post('http://localhost/instalacion/conexion', [
+            'driver' => $driver,
+            'host' => 'localhost',
+            'port' => $driver === 'mysql' ? '3306' : '1433',
+            'database' => 'test-database',
+            'username' => 'test',
+        ])->assertRedirect(route('installer.show'));
+
+        $this->assertSame('test-database', Dotenv::parse(file_get_contents($this->temporaryDirectory.'/.env'))['DB_DATABASE']);
+        $this->assertNull(config('database.connections.installer_server'));
+    }
+
+    public static function creationFailureCases(): array
+    {
+        return [
+            'mysql' => ['mysql', 1049],
+            'sql server' => ['sqlsrv', 4060],
+        ];
+    }
+
+    #[DataProvider('creationFailureCases')]
+    public function test_creation_failure_requests_a_manually_created_database(string $driver, int $missingCode): void
+    {
+        app(Installer::class)->enable(local: true);
+        $path = $this->temporaryDirectory.'/.env';
+        $original = file_get_contents($path);
+        $initial = \Mockery::mock(Connection::class);
+        $initial->shouldReceive('selectOne')->once()->andThrow($this->databaseException($missingCode));
+        $server = \Mockery::mock(Connection::class);
+        if ($driver === 'sqlsrv') {
+            $server->shouldReceive('selectOne')->once()->andReturn((object) ['database_id' => null, 'can_view' => 1]);
+        }
+        $server->shouldReceive('statement')->once()->andThrow($this->databaseException(1234));
+        DB::shouldReceive('connection')->with('installer')->once()->andReturn($initial);
+        DB::shouldReceive('connection')->with('installer_server')->once()->andReturn($server);
+        DB::shouldReceive('purge')->with('installer')->twice();
+        DB::shouldReceive('purge')->with('installer_server')->twice();
+        DB::shouldReceive('getConnections')->andReturn([]);
+
+        $this->post('http://localhost/instalacion/conexion', [
+            'driver' => $driver,
+            'host' => 'localhost',
+            'port' => $driver === 'mysql' ? '3306' : '1433',
+            'database' => 'test-database',
+            'username' => 'test',
+            'db_password' => 'secret-for-test',
+        ])->assertUnprocessable()
+            ->assertSee('No se pudo crear la base de datos')
+            ->assertSee('administrador que la cree')
+            ->assertDontSee('secret-for-test');
+
+        $this->assertSame($original, file_get_contents($path));
+        $this->assertNull(config('database.connections.installer_server'));
+    }
+
+    public function test_sql_server_does_not_create_a_database_without_catalog_visibility(): void
+    {
+        app(Installer::class)->enable(local: true);
+        $initial = \Mockery::mock(Connection::class);
+        $initial->shouldReceive('selectOne')->once()->andThrow($this->databaseException(4060));
+        $server = \Mockery::mock(Connection::class);
+        $server->shouldReceive('selectOne')->once()->andReturn((object) ['database_id' => null, 'can_view' => 0]);
+        $server->shouldNotReceive('statement');
+        DB::shouldReceive('connection')->with('installer')->once()->andReturn($initial);
+        DB::shouldReceive('connection')->with('installer_server')->once()->andReturn($server);
+        DB::shouldReceive('purge')->with('installer')->twice();
+        DB::shouldReceive('purge')->with('installer_server')->twice();
+        DB::shouldReceive('getConnections')->andReturn([]);
+
+        $this->post('http://localhost/instalacion/conexion', [
+            'driver' => 'sqlsrv',
+            'host' => 'localhost',
+            'port' => '1433',
+            'database' => 'test-database',
+            'username' => 'test',
+        ])->assertUnprocessable()->assertSee('No se pudo determinar si la base de datos existe');
+    }
+
+    public function test_sql_server_does_not_create_a_database_that_exists_but_is_inaccessible(): void
+    {
+        app(Installer::class)->enable(local: true);
+        $initial = \Mockery::mock(Connection::class);
+        $initial->shouldReceive('selectOne')->once()->andThrow($this->databaseException(4060));
+        $server = \Mockery::mock(Connection::class);
+        $server->shouldReceive('selectOne')->once()->andReturn((object) ['database_id' => 42, 'can_view' => 1]);
+        $server->shouldNotReceive('statement');
+        DB::shouldReceive('connection')->with('installer')->once()->andReturn($initial);
+        DB::shouldReceive('connection')->with('installer_server')->once()->andReturn($server);
+        DB::shouldReceive('purge')->with('installer')->twice();
+        DB::shouldReceive('purge')->with('installer_server')->twice();
+        DB::shouldReceive('getConnections')->andReturn([]);
+
+        $this->post('http://localhost/instalacion/conexion', [
+            'driver' => 'sqlsrv',
+            'host' => 'localhost',
+            'port' => '1433',
+            'database' => 'test-database',
+            'username' => 'test',
+        ])->assertUnprocessable()->assertSee('La base de datos existe, pero no se pudo acceder');
+    }
+
+    public function test_sql_server_reports_when_master_cannot_be_accessed(): void
+    {
+        app(Installer::class)->enable(local: true);
+        $initial = \Mockery::mock(Connection::class);
+        $initial->shouldReceive('selectOne')->once()->andThrow($this->databaseException(4060));
+        $server = \Mockery::mock(Connection::class);
+        $server->shouldReceive('selectOne')->once()->andThrow($this->databaseException(18456));
+        $server->shouldNotReceive('statement');
+        DB::shouldReceive('connection')->with('installer')->once()->andReturn($initial);
+        DB::shouldReceive('connection')->with('installer_server')->once()->andReturn($server);
+        DB::shouldReceive('purge')->with('installer')->twice();
+        DB::shouldReceive('purge')->with('installer_server')->twice();
+        DB::shouldReceive('getConnections')->andReturn([]);
+
+        $this->post('http://localhost/instalacion/conexion', [
+            'driver' => 'sqlsrv',
+            'host' => 'localhost',
+            'port' => '1433',
+            'database' => 'test-database',
+            'username' => 'test',
+        ])->assertUnprocessable()
+            ->assertSee('No se pudo comprobar o crear la base de datos')
+            ->assertSee('administrador que la cree');
+    }
+
+    public function test_access_denied_does_not_attempt_to_create_a_database(): void
+    {
+        app(Installer::class)->enable(local: true);
+        $initial = \Mockery::mock(Connection::class);
+        $initial->shouldReceive('selectOne')->once()->andThrow($this->databaseException(1044));
+        DB::shouldReceive('connection')->with('installer')->once()->andReturn($initial);
+        DB::shouldNotReceive('connection')->with('installer_server');
+        DB::shouldReceive('purge')->with('installer')->twice();
+        DB::shouldReceive('getConnections')->andReturn([]);
+
+        $this->post('http://localhost/instalacion/conexion', [
+            'driver' => 'mysql',
+            'host' => 'localhost',
+            'port' => '3306',
+            'database' => 'test-database',
+            'username' => 'test',
+        ])->assertUnprocessable()
+            ->assertSee('No se pudo validar la conexión')
+            ->assertDontSee('No se pudo crear la base de datos');
+    }
+
+    public function test_database_created_concurrently_is_rejected_if_it_contains_tables(): void
+    {
+        app(Installer::class)->enable(local: true);
+        $path = $this->temporaryDirectory.'/.env';
+        $original = file_get_contents($path);
+        $initial = \Mockery::mock(Connection::class);
+        $initial->shouldReceive('selectOne')->once()->andThrow($this->databaseException(1049));
+        $server = \Mockery::mock(Connection::class);
+        $server->shouldReceive('statement')->once()->andThrow($this->databaseException(1007));
+        $target = \Mockery::mock(Connection::class);
+        $target->shouldReceive('selectOne')->once()->with('SELECT DATABASE() AS database_name')
+            ->andReturn((object) ['database_name' => 'test-database']);
+        $target->shouldReceive('selectOne')->once()->with(\Mockery::on(fn ($sql): bool => str_contains($sql, 'information_schema.USER_PRIVILEGES')))
+            ->andReturn((object) ['can_view' => 1]);
+        $target->shouldReceive('selectOne')->once()->with('SELECT COUNT(*) AS object_count FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE()')
+            ->andReturn((object) ['object_count' => 1]);
+        DB::shouldReceive('connection')->with('installer')->twice()->andReturn($initial, $target);
+        DB::shouldReceive('connection')->with('installer_server')->once()->andReturn($server);
+        DB::shouldReceive('purge')->with('installer')->times(3);
+        DB::shouldReceive('purge')->with('installer_server')->twice();
+        DB::shouldReceive('getConnections')->andReturn([]);
+
+        $this->post('http://localhost/instalacion/conexion', [
+            'driver' => 'mysql',
+            'host' => 'localhost',
+            'port' => '3306',
+            'database' => 'test-database',
+            'username' => 'test',
+        ])->assertUnprocessable()->assertSee('La base contiene tablas o vistas');
+
+        $this->assertSame($original, file_get_contents($path));
+    }
+
+    public function test_mysql_creates_a_missing_database_on_an_isolated_test_server(): void
+    {
+        if (getenv('INSTALLER_ISOLATED_MYSQL_PORT') !== '23306' || ! is_string(getenv('INSTALLER_ISOLATED_MYSQL_PASSWORD'))) {
+            $this->markTestSkipped('La prueba requiere un servidor MySQL aislado de pruebas en el puerto 23306.');
+        }
+
+        app(Installer::class)->enable(local: true);
+        $database = 'panel_installer_'.bin2hex(random_bytes(8));
+
+        $this->post('http://localhost/instalacion/conexion', [
+            'driver' => 'mysql',
+            'host' => '127.0.0.1',
+            'port' => '23306',
+            'database' => $database,
+            'username' => 'root',
+            'db_password' => getenv('INSTALLER_ISOLATED_MYSQL_PASSWORD'),
+        ])->assertRedirect(route('installer.show'));
+
+        $this->assertSame($database, Dotenv::parse(file_get_contents($this->temporaryDirectory.'/.env'))['DB_DATABASE']);
+    }
+
+    private function databaseException(int $code): PDOException
+    {
+        $exception = new PDOException('database error');
+        $exception->errorInfo = ['42000', $code, 'database error'];
+
+        return $exception;
     }
 
     public function test_mysql_requires_visibility_of_the_entire_database_and_rejects_existing_tables(): void

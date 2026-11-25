@@ -7,6 +7,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use PDOException;
 use Throwable;
 
 class Installer
@@ -137,8 +138,21 @@ class Installer
             try {
                 config(['database.connections.installer' => $this->connectionConfig($connection)]);
                 DB::purge('installer');
-                $database = DB::connection('installer');
-                $this->checkTarget($database, $connection['database'], $driver);
+                try {
+                    $this->checkTarget(DB::connection('installer'), $connection['database'], $driver);
+                } catch (PDOException $exception) {
+                    $missingCode = $driver === 'mysql' ? 1049 : 4060;
+                    if ((int) ($exception->errorInfo[1] ?? 0) !== $missingCode) {
+                        throw $exception;
+                    }
+
+                    $this->createMissingDatabase($connection, $driver);
+                    DB::purge('installer');
+                    $this->checkTarget(DB::connection('installer'), $connection['database'], $driver);
+                }
+            } catch (InstallerException $exception) {
+                Log::warning('Falló la comprobación de la base de instalación.', ['exception' => $exception::class]);
+                throw $exception;
             } catch (Throwable $exception) {
                 Log::warning('Falló la comprobación de la base de instalación.', ['exception' => $exception::class]);
                 if (! extension_loaded('pdo_'.$driver)) {
@@ -160,6 +174,59 @@ class Installer
 
             return $state['code_hash'];
         });
+    }
+
+    /**
+     * @param  array{driver?: string, host: string, port: string, database: string, username: string, password: string, trust_certificate: bool}  $connection
+     */
+    private function createMissingDatabase(array $connection, string $driver): void
+    {
+        $serverConfig = $this->connectionConfig($connection);
+        $serverConfig['database'] = $driver === 'mysql' ? '' : 'master';
+        config(['database.connections.installer_server' => $serverConfig]);
+        DB::purge('installer_server');
+
+        try {
+            $server = DB::connection('installer_server');
+            if ($driver === 'sqlsrv') {
+                try {
+                    $result = $server->selectOne(
+                        "SELECT DB_ID(?) AS database_id, HAS_PERMS_BY_NAME(NULL, NULL, 'VIEW ANY DATABASE') AS can_view",
+                        [$connection['database']],
+                    );
+                } catch (PDOException $exception) {
+                    Log::warning('No se pudo comprobar la base de instalación en el servidor.', ['exception' => $exception::class]);
+                    throw new InstallerException('No se pudo comprobar o crear la base de datos. Revise la conexión y los permisos o solicite a un administrador que la cree.');
+                }
+                if (! $result) {
+                    throw new InstallerException('No se pudo determinar si la base de datos existe. Solicite a un administrador que la compruebe.');
+                }
+                if ($result->database_id !== null) {
+                    throw new InstallerException('La base de datos existe, pero no se pudo acceder. Verifique que el usuario tenga acceso.');
+                }
+                if ((int) $result->can_view !== 1) {
+                    throw new InstallerException('No se pudo determinar si la base de datos existe. Solicite a un administrador que la compruebe.');
+                }
+            }
+
+            $name = $driver === 'mysql'
+                ? '`'.str_replace('`', '``', $connection['database']).'`'
+                : '['.str_replace(']', ']]', $connection['database']).']';
+            try {
+                if (! $server->statement('CREATE DATABASE '.$name)) {
+                    throw new InstallerException('No se pudo crear la base de datos. Solicite a un administrador que la cree y conceda los permisos necesarios.');
+                }
+            } catch (PDOException $exception) {
+                $alreadyExistsCode = $driver === 'mysql' ? 1007 : 1801;
+                if ((int) ($exception->errorInfo[1] ?? 0) !== $alreadyExistsCode) {
+                    Log::warning('No se pudo crear la base de instalación.', ['exception' => $exception::class]);
+                    throw new InstallerException('No se pudo crear la base de datos. Solicite a un administrador que la cree y conceda los permisos necesarios.');
+                }
+            }
+        } finally {
+            DB::purge('installer_server');
+            config(['database.connections.installer_server' => null]);
+        }
     }
 
     /**

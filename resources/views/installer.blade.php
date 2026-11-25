@@ -43,7 +43,7 @@
                     ? array_filter(request()->only(['driver', 'host', 'port', 'database', 'username', 'trust_certificate']), 'is_scalar')
                     : [];
             @endphp
-            <p class="intro">Ingrese @if (! $local) el código generado en el servidor y @endif los datos de una base ya creada, sin tablas ni vistas.</p>
+            <p class="intro">Ingrese @if (! $local) el código generado en el servidor y @endif los datos de conexión. La base debe estar vacía; si no existe, se intentará crearla.</p>
             <form class="form" method="post" action="{{ route('installer.connect') }}" autocomplete="off">
                 @csrf
                 @if (! $local)
